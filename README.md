@@ -57,6 +57,14 @@ cd /opt/apps
 git clone https://github.com/ecooperman/shared-python.git
 ```
 
+Clone it as `deploy`, not root. If git later says "detected dubious ownership", the folder
+isn't owned by `deploy`: run `sudo chown -R deploy:deploy /opt/apps/shared-python` (don't
+use `safe.directory`; the apps' `pip install -e` needs to write there too).
+
+This repo's deploy restarts the apps, so each app's venv must already have the package
+installed (run `pip install -r requirements.txt` in the app, as `deploy`) before this
+workflow first runs, or the apps crash-loop with `No module named 'shared_python'`.
+
 Do this **before** pushing an app that lists `-e ../shared-python` in its
 requirements, or that app's deploy fails at `pip install`. The repo also needs the same
 three GitHub Actions secrets as the apps (`DO_HOST`, `DO_USER`, `DO_SSH_KEY`) so its
