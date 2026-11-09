@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shared-python"
+version = "0.1.0"
+description = "Code shared by the personal apps: Cloudflare Access sign-in, the Invitees group, notifications and email."
+requires-python = ">=3.9"
+dependencies = [
+    "fastapi",
+    "requests",
+    "PyJWT[crypto]",
+]
+
+[tool.setuptools]
+packages = ["shared_python"]
