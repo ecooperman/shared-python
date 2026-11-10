@@ -15,7 +15,7 @@ def _nothing_leaves_the_machine(monkeypatch):
     for name in (
         "CF_API_TOKEN", "CF_ACCOUNT_ID", "CF_INVITEES_GROUP_ID", "NTFY_TOPIC", "NTFY_TOKEN",
         "PUSHOVER_APP_TOKEN", "PUSHOVER_USER_KEY", "SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD",
-        "SMTP_FROM", "NOTIFY_EMAIL", "CF_TEAM_DOMAIN", "CF_ACCESS_AUD", "KEY_ENCRYPTION_SECRET",
+        "SMTP_FROM", "NOTIFY_EMAIL", "CF_TEAM_DOMAIN", "CF_ACCESS_AUD", "KEY_ENCRYPTION_SECRET", "OIDC_ISSUER", "OIDC_JWKS_URL", "OIDC_AUDIENCE", "OIDC_COOKIE",
     ):
         monkeypatch.setattr(settings, name, None)
     monkeypatch.setattr(settings, "ENV", "local")
@@ -25,6 +25,7 @@ def _nothing_leaves_the_machine(monkeypatch):
         raise AssertionError(f"a test made a real network call: {args[:2]}")
 
     monkeypatch.setattr(requests, "request", refuse)
+    monkeypatch.setattr(requests, "get", refuse)
     monkeypatch.setattr(requests, "post", refuse)
     monkeypatch.setattr(smtplib, "SMTP", refuse)
     monkeypatch.setattr(smtplib, "SMTP_SSL", refuse)

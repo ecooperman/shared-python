@@ -35,6 +35,31 @@ Locally, install it into the app's venv once: `venv/bin/pip install -e ../shared
 from shared_python import auth, cloudflare, keystore, notify
 ```
 
+## Signing in with a hosted identity provider
+
+`shared_python.auth` accepts a verified Cloudflare Access token, a verified token from
+any OIDC identity provider, or both (so an app can move across without a flag day). Nothing
+changes until `OIDC_ISSUER` is set in `/etc/personal-apps/shared.env`. Which provider it is
+is only settings:
+
+| Setting | What to put |
+|---|---|
+| `OIDC_ISSUER` | The token's `iss` value (a trailing slash either way is fine). Keys are found at `{issuer}/.well-known/openid-configuration`. |
+| `OIDC_JWKS_URL` | Only if the provider has no discovery document: where its signing keys are. |
+| `OIDC_AUDIENCE` | The token's `aud` (comma-separated for several). Leave unset only if the provider's tokens carry none. |
+| `OIDC_ALGORITHMS` | Default `RS256,ES256`. Only asymmetric algorithms are ever used, whatever is set. |
+| `OIDC_EMAIL_CLAIM` | Default `email`. Some providers leave the email out of their tokens unless you add it (a custom claim or token template) - the log says which claim was missing. |
+| `OIDC_COOKIE` | The provider's session cookie name, if it delivers the token that way. An `Authorization: Bearer` token always works. |
+
+A token whose `email_verified` is false is refused: apps identify people by email, so an
+address nobody proved they own must not sign anyone in. Production still refuses every
+request when neither Cloudflare nor a provider is configured.
+
+**Checklist when trying a provider:** the issuer and audience it puts in tokens; whether the
+email is in the token (and under what name); whether it verifies emails; where the token
+travels (cookie name or bearer); that its cookie is shared across `*.evancooperman.com` if
+the apps are on different subdomains.
+
 ## Changing it
 
 Several apps run this code, so a change reaches all of them. Keep signatures stable

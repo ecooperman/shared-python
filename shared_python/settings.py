@@ -26,6 +26,26 @@ ENV = os.environ.get("APP_ENV", "local")
 CF_TEAM_DOMAIN = os.environ.get("CF_TEAM_DOMAIN")  # e.g. "yourteam.cloudflareaccess.com"
 CF_ACCESS_AUD = os.environ.get("CF_ACCESS_AUD")
 
+# --- a hosted identity provider (shared_python.auth, optional) --------------
+# Any provider that issues signed OIDC tokens (JWTs) works, with no code change: set
+# these instead. Production accepts a verified Cloudflare Access token, a verified
+# provider token, or both (so an app can move across without a flag day).
+# The token's `iss` must match this (a trailing slash either way is fine). Keys are
+# found at {issuer}/.well-known/openid-configuration unless OIDC_JWKS_URL is given.
+OIDC_ISSUER = os.environ.get("OIDC_ISSUER")
+OIDC_JWKS_URL = os.environ.get("OIDC_JWKS_URL")
+# Comma-separated; checked against the token's `aud` when set (leave unset only if the
+# provider issues tokens with no audience; the issuer is checked either way).
+OIDC_AUDIENCE = os.environ.get("OIDC_AUDIENCE")
+# Signature algorithms accepted; only asymmetric ones (RS*, ES*, PS*, EdDSA) are ever used.
+OIDC_ALGORITHMS = os.environ.get("OIDC_ALGORITHMS", "RS256,ES256")
+# Which claim holds the person's email. Some providers leave it out of their tokens
+# unless asked (a custom claim or token template) - then set it up there.
+OIDC_EMAIL_CLAIM = os.environ.get("OIDC_EMAIL_CLAIM", "email")
+# Name of the cookie that carries the token (the provider's session cookie). A token
+# in an `Authorization: Bearer` header is always accepted too.
+OIDC_COOKIE = os.environ.get("OIDC_COOKIE")
+
 # --- letting new people in (shared_python.cloudflare) ----------------------
 # The API token needs only "Access: Organizations, Identity Providers, and Groups
 # Edit". The group is the one the shared-apps Access policy allows ("Invitees").
