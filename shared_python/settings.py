@@ -35,6 +35,13 @@ CF_INVITEES_GROUP_ID = os.environ.get("CF_INVITEES_GROUP_ID")
 # Cloudflare's free Access plan allows 50 people; approving past this is refused.
 ACCESS_SEAT_CAP = int_env("ACCESS_SEAT_CAP", 50)
 
+# --- people's own API keys (shared_python.keystore) -------------------------
+# Secret the saved keys are encrypted with. REQUIRED in production for saving keys
+# (without it the Profile page says saving isn't set up); never change it once keys
+# are saved, or they become unreadable. Generate once with:
+#   python3 -c "import secrets; print(secrets.token_urlsafe(48))"
+KEY_ENCRYPTION_SECRET = os.environ.get("KEY_ENCRYPTION_SECRET")
+
 # --- telling people (shared_python.notify) ---------------------------------
 # Each channel is on when its settings are present; use any combination.
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC")  # anyone who knows the topic can read it: make it long and random

@@ -15,7 +15,7 @@ def _nothing_leaves_the_machine(monkeypatch):
     for name in (
         "CF_API_TOKEN", "CF_ACCOUNT_ID", "CF_INVITEES_GROUP_ID", "NTFY_TOPIC", "NTFY_TOKEN",
         "PUSHOVER_APP_TOKEN", "PUSHOVER_USER_KEY", "SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD",
-        "SMTP_FROM", "NOTIFY_EMAIL", "CF_TEAM_DOMAIN", "CF_ACCESS_AUD",
+        "SMTP_FROM", "NOTIFY_EMAIL", "CF_TEAM_DOMAIN", "CF_ACCESS_AUD", "KEY_ENCRYPTION_SECRET",
     ):
         monkeypatch.setattr(settings, name, None)
     monkeypatch.setattr(settings, "ENV", "local")

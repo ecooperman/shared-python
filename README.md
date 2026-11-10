@@ -1,17 +1,19 @@
 # shared-python
 
 Code the personal apps share instead of each keeping its own copy: signing in through
-Cloudflare Access, letting someone through the Access gate, and telling people things.
+Cloudflare Access, letting someone through the Access gate, telling people things, and encrypting
+people's own API keys.
 It sits next to the apps (`~/code/personal-projects/shared-python`, and
 `/opt/apps/shared-python` on the droplet) the way `shared-assets` does for the
 front-end files.
 
 | Module | What it does |
 |---|---|
-| `shared_python.settings` | The settings every app reads from the shared environment file (`/etc/personal-apps/shared.env`): Cloudflare, ntfy, Pushover, SMTP. |
+| `shared_python.settings` | The settings every app reads from the shared environment file (`/etc/personal-apps/shared.env`): Cloudflare, ntfy, Pushover, SMTP, and `KEY_ENCRYPTION_SECRET`. |
 | `shared_python.auth` | `request_email(request, dev_user_email)`: who is signed in, from Cloudflare Access's signed token (refuses everything in production if that isn't configured; a header or cookie plays other people locally). |
 | `shared_python.cloudflare` | Whether an email is let through the Access gate (`is_let_in`) and adding one to the Invitees group (`allow_email`). |
-| `shared_python.notify` | Telling the administrator something needs them (ntfy / Pushover / email), and emailing a person they've been given access. |
+| `shared_python.notify` | Telling the administrator something needs them (ntfy / Pushover / email), and emailing a person they've been given access (`tell_given_access`) or let into the app (`tell_let_in`). |
+| `shared_python.keystore` | Encrypting a person's own API key for storage (Fernet, keyed from `KEY_ENCRYPTION_SECRET`): `encrypt`, `decrypt`, `clean`, `last4`, `scrub`. Which providers exist, how a key is checked and the table it lives in stay with each app (see trip-planning's `app/apikeys.py`). |
 
 What differs between apps is passed in by the app, never read from here: the
 administrators (`is_let_in(email, admin_emails)`), the app's name, and the links in
@@ -30,7 +32,7 @@ by the deploy workflow), so that relative path is the sibling folder in both pla
 Locally, install it into the app's venv once: `venv/bin/pip install -e ../shared-python`.
 
 ```python
-from shared_python import auth, cloudflare, notify
+from shared_python import auth, cloudflare, keystore, notify
 ```
 
 ## Changing it

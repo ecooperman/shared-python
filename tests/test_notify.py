@@ -243,3 +243,29 @@ def test_the_administrator_alert_uses_the_apps_name_and_link(posts, monkeypatch)
     assert sent["title"] == "Trips: invite waiting for approval"
     assert "alice@example.com wants to let new@example.com in (can edit)" in sent["message"]
     assert sent["click"] == "https://trips.example/invites.html"
+
+
+# --- an invite to the app itself (no list or trip to name) ------------------------
+
+
+def test_the_administrator_alert_for_an_app_invite_has_no_access_level(posts, monkeypatch):
+    monkeypatch.setattr(config, "NTFY_TOPIC", "t")
+    notify.invite_requested("Notes", "alice@example.com", "new@example.com", None, "https://notes.example/invites.html")
+    message = posts[0]["json"]["message"]
+    assert message == "alice@example.com wants to let new@example.com in."
+
+
+def test_the_email_to_someone_let_into_the_app_says_how_to_sign_in(smtp, monkeypatch):
+    _configure_smtp(monkeypatch)
+    notify.tell_let_in("dana@example.com", "alice@example.com", "Notes", "https://notes.example")
+    msg = smtp.instances[0].log[-1][1]
+    body = msg.get_content()
+    assert msg["To"] == "dana@example.com" and msg["Subject"] == "alice@example.com invited you to Notes"
+    assert "invited you to Notes, and an administrator has approved it." in body
+    assert "Open it here: https://notes.example" in body
+    assert "\n    dana@example.com\n" in body and "one-time PIN" in body
+
+
+def test_telling_someone_they_were_let_in_does_nothing_without_a_server_and_never_raises(smtp):
+    notify.tell_let_in("a@example.com", "b@example.com", "Notes", None)
+    assert smtp.instances == []

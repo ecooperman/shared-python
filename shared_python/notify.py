@@ -95,15 +95,30 @@ def notify(title: str, message: str, link: Optional[str] = None) -> None:
             log.warning("Notification via %s failed: %s", name, describe_failure(exc))
 
 
-def invite_requested(app_name: str, inviter_email: str, invitee_email: str, role: str, admin_url: str) -> None:
+def invite_requested(app_name: str, inviter_email: str, invitee_email: str, role: Optional[str], admin_url: str) -> None:
     """Tell the administrator someone asked for a new person to be let in.
-    `app_name` ("Lists") and `admin_url` (the app's Invites page) are the app's own."""
-    access = "edit" if role == "edit" else "view"
+    `app_name` ("Lists") and `admin_url` (the app's Invites page) are the app's own.
+    `role` is what they'd get on a shared thing; None for an invite to the app itself."""
+    what = "" if role is None else f" (can {'edit' if role == 'edit' else 'view'})"
     notify(
         f"{app_name}: invite waiting for approval",
-        f"{inviter_email} wants to let {invitee_email} in (can {access}).",
+        f"{inviter_email} wants to let {invitee_email} in{what}.",
         admin_url,
     )
+
+
+def _sign_in_lines(to: str) -> list:
+    """For someone who has never signed in here: Cloudflare's sign-in page can't be
+    pre-filled from a link, so name the address to type there - it has to be this
+    one, the one they were let in as."""
+    return [
+        "",
+        "The first time you open it you'll be asked to sign in. Enter this email address:",
+        "",
+        f"    {to}",
+        "",
+        "and a one-time PIN will be sent to it - there is no password to set up.",
+    ]
 
 
 def tell_given_access(
@@ -128,17 +143,22 @@ def tell_given_access(
     if open_url:
         lines += ["", f"Open it here: {open_url}"]
     if new_person:
-        # Cloudflare's sign-in page can't be pre-filled from a link, so name the
-        # address to type there - it has to be this one, the one they were let in as.
-        lines += [
-            "",
-            "The first time you open it you'll be asked to sign in. Enter this email address:",
-            "",
-            f"    {to}",
-            "",
-            "and a one-time PIN will be sent to it - there is no password to set up.",
-        ]
+        lines += _sign_in_lines(to)
     try:
         send_email(to, f'{inviter_email} shared "{name}" with you', "\n".join(lines))
     except Exception as exc:  # noqa: BLE001 - never fail the approval or the add that triggered this
+        log.warning("Telling the new person by email failed: %s", describe_failure(exc))
+
+
+def tell_let_in(to: str, inviter_email: str, app_name: str, open_url: Optional[str]) -> None:
+    """Tell someone they've been let into the app itself (an invite to the app, not
+    to one shared thing) - by email, with how to sign in, since they have never used
+    it. Best effort, like tell_given_access(): a failure is logged, never raised."""
+    lines = [f"{inviter_email} invited you to {app_name}, and an administrator has approved it."]
+    if open_url:
+        lines += ["", f"Open it here: {open_url}"]
+    lines += _sign_in_lines(to)
+    try:
+        send_email(to, f"{inviter_email} invited you to {app_name}", "\n".join(lines))
+    except Exception as exc:  # noqa: BLE001
         log.warning("Telling the new person by email failed: %s", describe_failure(exc))
