@@ -178,6 +178,29 @@ def test_the_subject_is_one_line_even_if_a_list_name_is_not(smtp, monkeypatch):
     assert "\n" not in msg["Subject"] and msg["Bcc"] is None
 
 
+def test_an_email_can_carry_a_rich_version_and_a_reply_to(smtp, monkeypatch):
+    _configure_smtp(monkeypatch)
+    assert notify.send_email("a@example.com", "Hi", "plain words", html="<p>rich <b>words</b></p>", reply_to="sender@example.com") is True
+    msg = smtp.instances[0].log[-1][1]
+    assert msg["Reply-To"] == "sender@example.com"
+    assert msg.get_body(("plain",)).get_content().strip() == "plain words"
+    assert "<b>words</b>" in msg.get_body(("html",)).get_content()
+
+
+def test_a_plain_email_has_no_rich_part_and_no_reply_to(smtp, monkeypatch):
+    _configure_smtp(monkeypatch)
+    notify.send_email("a@example.com", "Hi", "plain words")
+    msg = smtp.instances[0].log[-1][1]
+    assert msg["Reply-To"] is None and msg.get_body(("html",)) is None
+
+
+def test_a_reply_to_cannot_start_a_new_header(smtp, monkeypatch):
+    _configure_smtp(monkeypatch)
+    notify.send_email("a@example.com", "Hi", "body", reply_to="x@example.com\nBcc: evil@example.com")
+    msg = smtp.instances[0].log[-1][1]
+    assert "\n" not in msg["Reply-To"] and msg["Bcc"] is None
+
+
 def test_tell_given_access_does_nothing_without_a_server_and_never_raises(smtp):
     notify.tell_given_access("a@example.com", "b@example.com", "list", "Gifts", "https://x.example/list.html?id=1", "view", True, "Lists")
     assert smtp.instances == []

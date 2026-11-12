@@ -53,17 +53,23 @@ def _one_line(text: str) -> str:
     return " ".join(str(text).split())
 
 
-def send_email(to: str, subject: str, body: str) -> bool:
-    """One plain-text email through the configured SMTP server. Does nothing
-    (and says so) without one. Raises on a failed send - callers that must not
-    fail wrap it (see notify() and tell_given_access())."""
+def send_email(to: str, subject: str, body: str, html: Optional[str] = None, reply_to: Optional[str] = None) -> bool:
+    """One email through the configured SMTP server: plain text, plus a rich
+    (HTML) version when `html` is given, and replies going to `reply_to` when
+    given (for mail sent on a person's behalf). Does nothing (and says so)
+    without a server. Raises on a failed send - callers that must not fail wrap
+    it (see notify() and tell_given_access())."""
     if not (settings.SMTP_HOST and settings.SMTP_FROM):
         return False
     msg = EmailMessage()
     msg["Subject"] = _one_line(subject)
     msg["From"] = settings.SMTP_FROM
     msg["To"] = to
+    if reply_to:
+        msg["Reply-To"] = _one_line(reply_to)
     msg.set_content(body)
+    if html:
+        msg.add_alternative(html, subtype="html")
     if settings.SMTP_PORT == 465:
         server = smtplib.SMTP_SSL(settings.SMTP_HOST, settings.SMTP_PORT, timeout=TIMEOUT)
     else:
