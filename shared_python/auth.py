@@ -65,16 +65,29 @@ def _email_from_verified_token(token: str) -> str:
 
 # --- a hosted identity provider (any OIDC issuer) ---------------------------------
 
-_oidc_client: Optional[jwt.PyJWKClient] = None
-_oidc_client_key: Optional[str] = None
+# issuer + explicit keys URL -> that issuer's key client (keys cached by PyJWKClient)
+_oidc_client: Optional[dict] = None
 
 # Only asymmetric algorithms are ever accepted: allowing HS256 would let anyone who
 # knows the (public) key sign tokens with it.
 _ASYMMETRIC = ("RS", "ES", "PS", "EdDSA")
 
 
+def oidc_issuers() -> list:
+    """The configured issuers, normalized (no trailing slash). OIDC_ISSUER may list
+    several, comma-separated, so a move between providers can run both side by side;
+    the first one is where people are sent to sign in."""
+    return [i.strip().rstrip("/") for i in (settings.OIDC_ISSUER or "").split(",") if i.strip()]
+
+
 def oidc_configured() -> bool:
-    return bool(settings.OIDC_ISSUER)
+    return bool(oidc_issuers())
+
+
+def oidc_cookie_name() -> Optional[str]:
+    """The cookie the signed-in person's token travels in: OIDC_COOKIE if a provider
+    delivers one, else our own (when this app does the sign-in itself)."""
+    return settings.OIDC_COOKIE or ("oidc_session" if settings.OIDC_CLIENT_ID else None)
 
 
 def _oidc_algorithms() -> list:
@@ -82,36 +95,54 @@ def _oidc_algorithms() -> list:
     return [a for a in wanted if a.startswith(_ASYMMETRIC)]
 
 
-def _oidc_jwks_url() -> str:
-    """Where the provider publishes its signing keys: given explicitly, or found
-    through the issuer's standard discovery document."""
-    if settings.OIDC_JWKS_URL:
+def _oidc_jwks_url(issuer: str) -> str:
+    """Where the provider publishes its signing keys: given explicitly (one issuer
+    only), or found through the issuer's standard discovery document."""
+    if settings.OIDC_JWKS_URL and len(oidc_issuers()) == 1:
         return settings.OIDC_JWKS_URL
-    issuer = settings.OIDC_ISSUER.rstrip("/")
     resp = requests.get(f"{issuer}/.well-known/openid-configuration", timeout=10)
     resp.raise_for_status()
     return resp.json()["jwks_uri"]
 
 
+def _issuer_for(token: str, issuers: list) -> str:
+    """Which configured issuer a token claims to come from (its signature is checked
+    afterwards, against that issuer's keys). A token naming none of them gets the
+    first, whose checks then refuse it."""
+    try:
+        claimed = jwt.decode(token, options={"verify_signature": False}).get("iss")
+    except jwt.PyJWTError:
+        claimed = None
+    if isinstance(claimed, str) and claimed.rstrip("/") in issuers:
+        return claimed.rstrip("/")
+    return issuers[0]
+
+
 def _oidc_signing_key(token: str):
     """The provider's public key for this token (keys cached by PyJWKClient)."""
-    global _oidc_client, _oidc_client_key
-    if _oidc_client is None or _oidc_client_key != (settings.OIDC_JWKS_URL, settings.OIDC_ISSUER):
-        _oidc_client = jwt.PyJWKClient(_oidc_jwks_url(), lifespan=3600)
-        _oidc_client_key = (settings.OIDC_JWKS_URL, settings.OIDC_ISSUER)
-    return _oidc_client.get_signing_key_from_jwt(token).key
+    global _oidc_client
+    if _oidc_client is None:
+        _oidc_client = {}
+    issuer = _issuer_for(token, oidc_issuers())
+    cache_key = (issuer, settings.OIDC_JWKS_URL)
+    client = _oidc_client.get(cache_key)
+    if client is None:
+        client = _oidc_client[cache_key] = jwt.PyJWKClient(_oidc_jwks_url(issuer), lifespan=3600)
+    return client.get_signing_key_from_jwt(token).key
 
 
-def _email_from_oidc_token(token: str) -> str:
+def oidc_claims(token: str, audience: list) -> dict:
+    """The verified claims of a provider token: signature, expiry, issuer (any
+    configured one) and, when given, audience. 401 if anything is wrong."""
     algorithms = _oidc_algorithms()
     if not algorithms:
         log.error("OIDC_ALGORITHMS has no asymmetric algorithm - refusing provider tokens")
         raise HTTPException(status_code=503, detail="Sign-in is not configured on the server")
-    issuer = settings.OIDC_ISSUER.rstrip("/")
-    audience = [a.strip() for a in (settings.OIDC_AUDIENCE or "").split(",") if a.strip()]
+    issuers = oidc_issuers()
+    issuer = _issuer_for(token, issuers)
     required = ["exp", "iss"] + (["aud"] if audience else [])
     try:
-        claims = jwt.decode(
+        return jwt.decode(
             token,
             _oidc_signing_key(token),
             algorithms=algorithms,
@@ -123,6 +154,9 @@ def _email_from_oidc_token(token: str) -> str:
         # The type for anything that isn't a plain token problem: a library's message can echo a URL.
         log.warning("Rejected identity provider token: %s", exc if isinstance(exc, jwt.PyJWTError) else type(exc).__name__)
         raise HTTPException(status_code=401, detail="Invalid sign-in token")
+
+
+def email_from_claims(claims: dict) -> str:
     email = claims.get(settings.OIDC_EMAIL_CLAIM)
     if not email or not isinstance(email, str):
         log.warning(
@@ -136,12 +170,21 @@ def _email_from_oidc_token(token: str) -> str:
     return email
 
 
+def configured_audience() -> list:
+    return [a.strip() for a in (settings.OIDC_AUDIENCE or "").split(",") if a.strip()]
+
+
+def _email_from_oidc_token(token: str) -> str:
+    return email_from_claims(oidc_claims(token, configured_audience()))
+
+
 def _oidc_token(request: Request) -> Optional[str]:
     auth = request.headers.get("authorization", "")
     if auth[:7].lower() == "bearer " and auth[7:].strip():
         return auth[7:].strip()
-    if settings.OIDC_COOKIE:
-        return request.cookies.get(settings.OIDC_COOKIE) or None
+    cookie = oidc_cookie_name()
+    if cookie:
+        return request.cookies.get(cookie) or None
     return None
 
 
@@ -164,6 +207,13 @@ def request_email(request: Request, dev_user_email: str) -> str:
             if token:
                 return _email_from_oidc_token(token)
         raise HTTPException(status_code=401, detail="Not signed in")
+    # Local development, signed in through this app's own sign-in flow (a real
+    # provider, set up in the developer's shell): that session counts. Never a bare
+    # Bearer token, and nothing at all unless the flow is configured.
+    if oidc_configured() and settings.OIDC_CLIENT_ID:
+        cookie = request.cookies.get(oidc_cookie_name())
+        if cookie:
+            return _email_from_oidc_token(cookie)
     # Local development: no Cloudflare, so a header or a `dev_user` cookie (set
     # it in the browser console: document.cookie = "dev_user=bob@example.com;
     # path=/") plays a second person; otherwise the configured dev user.

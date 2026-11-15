@@ -11,6 +11,7 @@ front-end files.
 |---|---|
 | `shared_python.settings` | The settings every app reads from the shared environment file (`/etc/personal-apps/shared.env`): Cloudflare, ntfy, Pushover, SMTP, and `KEY_ENCRYPTION_SECRET`. |
 | `shared_python.auth` | `request_email(request, dev_user_email)`: who is signed in, from Cloudflare Access's signed token (refuses everything in production if that isn't configured; a header or cookie plays other people locally). |
+| `shared_python.oidc_login` | The app's own sign-in through a hosted identity provider: `/auth/login`, `/auth/callback`, `/auth/logout` (a router to mount) and `redirect_if_signed_out(request)` for HTML pages. Authorization-code flow with PKCE, state and nonce; plain OIDC, no vendor SDK. |
 | `shared_python.cloudflare` | Whether an email is let through the Access gate (`is_let_in`) and adding one to the Invitees group (`allow_email`). |
 | `shared_python.notify` | Telling the administrator something needs them (ntfy / Pushover / email), and emailing a person they've been given access (`tell_given_access`) or let into the app (`tell_let_in`). |
 | `shared_python.keystore` | Encrypting a person's own API key for storage (Fernet, keyed from `KEY_ENCRYPTION_SECRET`): `encrypt`, `decrypt`, `clean`, `last4`, `scrub`. Which providers exist, how a key is checked and the table it lives in stay with each app (see trip-planning's `app/apikeys.py`). |
@@ -54,6 +55,29 @@ is only settings:
 A token whose `email_verified` is false is refused: apps identify people by email, so an
 address nobody proved they own must not sign anyone in. Production still refuses every
 request when neither Cloudflare nor a provider is configured.
+
+### The app doing the sign-in itself (`oidc_login`)
+
+Instead of waiting for a token to arrive, the app sends people to the provider and receives
+them back. Mount it once (`app.include_router(oidc_login.router)`), and in each HTML page's route
+start with `oidc_login.redirect_if_signed_out(request, DEV_USER_EMAIL)` (return it if it isn't None).
+APIs keep answering 401. Nothing is reachable (404) until these are set, and none of it
+is used locally unless they are:
+
+| Setting | What to put |
+|---|---|
+| `OIDC_CLIENT_ID` | The provider application's client id. Also put it in `OIDC_AUDIENCE`: it is the ID token's audience. |
+| `OIDC_CLIENT_SECRET` | The application's secret, if its type has one (sent with PKCE). Leave unset for a public client. |
+| `OIDC_SCOPES` | Default `openid email profile`. |
+| `OIDC_ISSUER` | May list several, comma-separated, to run two providers side by side while moving: a token from any of them is accepted, and **the first one is where people are sent to sign in**. `OIDC_JWKS_URL` applies only with a single issuer. |
+
+Register `https://<app host>/auth/callback` as an allowed callback and `https://<app host>/` as
+an allowed logout URL at the provider (and the `http://localhost:<port>` pair for local runs).
+The ID token is kept in an httponly, host-only cookie (`oidc_session`, or `OIDC_COOKIE`) for as long as
+the token lives; when it ends, the next page visit goes back through the provider, which signs the
+person straight in again while their provider session lasts. Locally, only a session made by this flow
+counts (a bare bearer token never does); with no session the configured dev user is still used.
+The Log out link follows `logout_url` in the app's `/api/me` (see lists' `app/routers/me.py`).
 
 **Checklist when trying a provider:** the issuer and audience it puts in tokens; whether the
 email is in the token (and under what name); whether it verifies emails; where the token

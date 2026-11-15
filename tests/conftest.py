@@ -7,7 +7,7 @@ import smtplib
 import pytest
 import requests
 
-from shared_python import settings
+from shared_python import oidc_login, settings
 
 
 @pytest.fixture(autouse=True)
@@ -15,10 +15,11 @@ def _nothing_leaves_the_machine(monkeypatch):
     for name in (
         "CF_API_TOKEN", "CF_ACCOUNT_ID", "CF_INVITEES_GROUP_ID", "NTFY_TOPIC", "NTFY_TOKEN",
         "PUSHOVER_APP_TOKEN", "PUSHOVER_USER_KEY", "SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD",
-        "SMTP_FROM", "NOTIFY_EMAIL", "CF_TEAM_DOMAIN", "CF_ACCESS_AUD", "KEY_ENCRYPTION_SECRET", "OIDC_ISSUER", "OIDC_JWKS_URL", "OIDC_AUDIENCE", "OIDC_COOKIE",
+        "SMTP_FROM", "NOTIFY_EMAIL", "CF_TEAM_DOMAIN", "CF_ACCESS_AUD", "KEY_ENCRYPTION_SECRET", "OIDC_ISSUER", "OIDC_JWKS_URL", "OIDC_AUDIENCE", "OIDC_COOKIE", "OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET",
     ):
         monkeypatch.setattr(settings, name, None)
     monkeypatch.setattr(settings, "ENV", "local")
+    monkeypatch.setattr(oidc_login, "_discovery_cache", {})
     monkeypatch.setattr(settings, "ACCESS_SEAT_CAP", 50)
 
     def refuse(*args, **kwargs):

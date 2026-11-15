@@ -45,6 +45,14 @@ OIDC_EMAIL_CLAIM = os.environ.get("OIDC_EMAIL_CLAIM", "email")
 # Name of the cookie that carries the token (the provider's session cookie). A token
 # in an `Authorization: Bearer` header is always accepted too.
 OIDC_COOKIE = os.environ.get("OIDC_COOKIE")
+# --- signing in through the provider (shared_python.oidc_login, optional) ----
+# Set these and an app can send people to the provider's login page and receive them
+# back (/auth/login, /auth/callback, /auth/logout). The client id doubles as the
+# audience of the ID token we get back, so list it in OIDC_AUDIENCE too. The secret
+# is only needed if the provider's application type has one (it is sent with PKCE).
+OIDC_CLIENT_ID = os.environ.get("OIDC_CLIENT_ID")
+OIDC_CLIENT_SECRET = os.environ.get("OIDC_CLIENT_SECRET")
+OIDC_SCOPES = os.environ.get("OIDC_SCOPES", "openid email profile")
 
 # --- letting new people in (shared_python.cloudflare) ----------------------
 # The API token needs only "Access: Organizations, Identity Providers, and Groups
