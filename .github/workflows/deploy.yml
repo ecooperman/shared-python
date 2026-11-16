@@ -33,3 +33,4 @@ jobs:
             # every app that uses it has to restart to pick up a change.
             sudo systemctl restart lists
             sudo systemctl restart trip-planning
+            sudo systemctl restart dashboard
