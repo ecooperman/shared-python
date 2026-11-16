@@ -339,3 +339,32 @@ def test_a_logout_return_path_cannot_point_anywhere_else(front, monkeypatch, evi
     monkeypatch.setattr(settings, "OIDC_LOGOUT_RETURN_PATH", evil)
     target = urlparse(client.get("/auth/logout").headers["location"])
     assert parse_qs(target.query)["post_logout_redirect_uri"] == ["https://dashboard.example.org/"]
+
+
+def test_locally_apps_on_other_ports_of_localhost_are_not_the_front_door(monkeypatch, key):
+    """Every local app is localhost on its own port, so the front door check must look at the port too."""
+    monkeypatch.setattr(settings, "OIDC_ISSUER", ISSUER)
+    monkeypatch.setattr(settings, "OIDC_AUDIENCE", CLIENT)
+    monkeypatch.setattr(settings, "OIDC_LOGIN_URL", "http://localhost:8090/auth/login")
+    other = TestClient(app, base_url="http://localhost:8030", follow_redirects=False)
+    assert other.get("/logout-url").json()["url"] == "http://localhost:8090/auth/logout"
+    door = TestClient(app, base_url="http://localhost:8090", follow_redirects=False)
+    assert door.get("/logout-url").json()["url"] is None  # the front door itself: its own routes, or the default
+
+
+@pytest.mark.parametrize("login,host,same", [
+    ("https://dashboard.example.org/auth/login", "dashboard.example.org", True),
+    ("https://dashboard.example.org/auth/login", "DASHBOARD.example.org:443", True),
+    ("https://dashboard.example.org/auth/login", "lists.example.org", False),
+    ("http://localhost:8090/auth/login", "localhost:8090", True),
+    ("http://localhost:8090/auth/login", "localhost:8030", False),
+])
+def test_the_front_door_check_compares_host_and_port(login, host, same):
+    class Req:
+        headers = {"host": host}
+
+        class url:
+            scheme = "https" if login.startswith("https") else "http"
+            netloc = host
+
+    assert oidc_login._is_front_door_host(Req(), login) is same

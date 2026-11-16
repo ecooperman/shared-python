@@ -268,9 +268,19 @@ def _front_door() -> Optional[str]:
     return login_url if login_url and auth.oidc_configured() else None
 
 
+def _netloc(host: str, scheme: str) -> str:
+    """A host[:port] with the scheme's default port dropped, lowercased, so two spellings compare equal."""
+    host = host.lower()
+    default = {"http": ":80", "https": ":443"}.get(scheme)
+    return host[: -len(default)] if default and host.endswith(default) else host
+
+
 def _is_front_door_host(request: Request, login_url: str) -> bool:
-    host = (request.headers.get("host") or request.url.netloc).split(":")[0].lower()
-    return (urlsplit(login_url).hostname or "").lower() == host
+    """Is this request for the front door itself? Compares the port too: locally every app is
+    `localhost` on a different port."""
+    parts = urlsplit(login_url)
+    mine = request.headers.get("host") or request.url.netloc
+    return _netloc(parts.netloc, parts.scheme) == _netloc(mine, request.url.scheme)
 
 
 def redirect_if_signed_out(request: Request, dev_user_email: str = "") -> Optional[Response]:
