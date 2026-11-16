@@ -79,6 +79,25 @@ person straight in again while their provider session lasts. Locally, only a ses
 counts (a bare bearer token never does); with no session the configured dev user is still used.
 The Log out link follows `logout_url` in the app's `/api/me` (see lists' `app/routers/me.py`).
 
+### One front door for every app
+
+Rather than every app signing people in itself, one app (the **dashboard**, `dashboard.evancooperman.com`)
+does it and sets the session cookie for the whole parent domain; every other app only checks the cookie.
+
+| Setting | Where | What to put |
+|---|---|---|
+| `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | **the dashboard's own env file only** | The Auth0 application. The secret must not be in `shared.env`, which every app reads. |
+| `OIDC_COOKIE_DOMAIN` | the dashboard | `.evancooperman.com`: the cookie then reaches every subdomain, so one sign-in (and one log out) covers all apps. Unset = host-only. |
+| `OIDC_RETURN_HOSTS` | the dashboard | Where it may send people back to: `.evancooperman.com` (any subdomain, not the bare domain) or exact hosts. Locally `localhost`/`127.0.0.1` are allowed when unset; in production nothing is unless set. |
+| `OIDC_ISSUER`, `OIDC_AUDIENCE` | `shared.env` | Same as above (the audience is the client id). |
+| `OIDC_LOGIN_URL` | `shared.env` (every other app) | `https://dashboard.evancooperman.com/auth/login`. With it set, an app does no sign-in of its own: `redirect_if_signed_out` sends a signed-out visitor to the dashboard carrying the **full address** they wanted, and `logout_url(request)` is the dashboard's `/auth/logout` (ends the session for every app). |
+
+The return address is the sensitive part: `safe_next` accepts a path on the same site, or a full `https`
+address (plain `http` only locally) whose host is on `OIDC_RETURN_HOSTS`, and turns everything else
+(other hosts, look-alike suffixes, `user@host` tricks, `//host`, control characters, non-ASCII hosts,
+over-long values) into `/`. It is checked when the sign-in starts **and again** when the person comes back,
+because the pending-login cookie is the browser's to edit.
+
 **Checklist when trying a provider:** the issuer and audience it puts in tokens; whether the
 email is in the token (and under what name); whether it verifies emails; where the token
 travels (cookie name or bearer); that its cookie is shared across `*.evancooperman.com` if

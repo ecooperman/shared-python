@@ -87,7 +87,7 @@ def oidc_configured() -> bool:
 def oidc_cookie_name() -> Optional[str]:
     """The cookie the signed-in person's token travels in: OIDC_COOKIE if a provider
     delivers one, else our own (when this app does the sign-in itself)."""
-    return settings.OIDC_COOKIE or ("oidc_session" if settings.OIDC_CLIENT_ID else None)
+    return settings.OIDC_COOKIE or ("oidc_session" if (settings.OIDC_CLIENT_ID or settings.OIDC_LOGIN_URL) else None)
 
 
 def _oidc_algorithms() -> list:
@@ -210,7 +210,7 @@ def request_email(request: Request, dev_user_email: str) -> str:
     # Local development, signed in through this app's own sign-in flow (a real
     # provider, set up in the developer's shell): that session counts. Never a bare
     # Bearer token, and nothing at all unless the flow is configured.
-    if oidc_configured() and settings.OIDC_CLIENT_ID:
+    if oidc_configured() and (settings.OIDC_CLIENT_ID or settings.OIDC_LOGIN_URL):
         cookie = request.cookies.get(oidc_cookie_name())
         if cookie:
             return _email_from_oidc_token(cookie)

@@ -53,6 +53,21 @@ OIDC_COOKIE = os.environ.get("OIDC_COOKIE")
 OIDC_CLIENT_ID = os.environ.get("OIDC_CLIENT_ID")
 OIDC_CLIENT_SECRET = os.environ.get("OIDC_CLIENT_SECRET")
 OIDC_SCOPES = os.environ.get("OIDC_SCOPES", "openid email profile")
+# --- one shared front door for every app (see oidc_login.py) ------------------
+# The app that does the sign-in (the dashboard) sets the session cookie for the whole parent
+# domain, so one sign-in covers every app: e.g. ".evancooperman.com". Unset = host-only cookie.
+OIDC_COOKIE_DOMAIN = os.environ.get("OIDC_COOKIE_DOMAIN")
+# Front door only: where people may be sent back to after signing in, comma-separated. A leading
+# dot means any subdomain (".evancooperman.com"); otherwise an exact host ("localhost"). Locally,
+# when unset, localhost and 127.0.0.1 are allowed. Anything else is refused (open-redirect guard).
+OIDC_RETURN_HOSTS = os.environ.get("OIDC_RETURN_HOSTS")
+# Every other app: the front door's login address ("https://dashboard.evancooperman.com/auth/login").
+# Set, an app does no sign-in of its own: it only checks the session cookie and sends signed-out
+# visitors there. Needs OIDC_ISSUER and OIDC_AUDIENCE too, but never the client secret.
+OIDC_LOGIN_URL = os.environ.get("OIDC_LOGIN_URL")
+# Front door only: the page on its own site that people land on after logging out (a path; register
+# the full address in the provider's allowed logout URLs). Default "/".
+OIDC_LOGOUT_RETURN_PATH = os.environ.get("OIDC_LOGOUT_RETURN_PATH", "/")
 
 # --- letting new people in (shared_python.cloudflare) ----------------------
 # The API token needs only "Access: Organizations, Identity Providers, and Groups

@@ -19,6 +19,14 @@ The cookie is host-only (each app signs in separately, and the provider's own se
 makes the second app's sign-in instant). Its lifetime is the ID token's.
 
 Nothing here is reachable until OIDC_ISSUER and OIDC_CLIENT_ID are set.
+
+One front door for every app (the dashboard): the app that does the sign-in sets
+OIDC_COOKIE_DOMAIN (".evancooperman.com") so the session cookie covers every subdomain, and
+OIDC_RETURN_HOSTS, the hosts it may send people back to. Every other app sets only
+OIDC_LOGIN_URL (the front door's /auth/login): it never sees the client secret, just checks
+the cookie (shared_python.auth) and, for signed-out visitors, `redirect_if_signed_out` sends
+them to the front door with the page they wanted, and `logout_url` points its Log out link at
+the front door's /auth/logout, which ends the session for all of them at once.
 """
 import base64
 import hashlib
@@ -29,7 +37,7 @@ import secrets
 import time
 from html import escape
 from typing import Optional
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 import requests
 from fastapi import APIRouter, HTTPException, Request
@@ -77,11 +85,44 @@ def _base_url(request: Request) -> str:
     return f"{scheme}://{host}"
 
 
+def _return_hosts() -> list:
+    raw = settings.OIDC_RETURN_HOSTS
+    if raw:
+        return [h.strip().lower() for h in raw.split(",") if h.strip()]
+    return [] if _secure() else ["localhost", "127.0.0.1"]
+
+
+def _host_allowed(host: str) -> bool:
+    """An exact host, or (for a pattern with a leading dot) any subdomain of it, never the bare domain."""
+    host = host.lower()
+    for pattern in _return_hosts():
+        if pattern.startswith("."):
+            if host.endswith(pattern) and len(host) > len(pattern):
+                return True
+        elif host == pattern:
+            return True
+    return False
+
+
 def safe_next(value: Optional[str]) -> str:
-    """Where to go after signing in: a path on this site, never another address."""
-    if value and value.startswith("/") and not value.startswith("//") and "\\" not in value and "\n" not in value:
-        return value
-    return "/"
+    """Where to go after signing in: a path on this site, or a full address on a host the front
+    door is allowed to send people back to (OIDC_RETURN_HOSTS). Anything else becomes "/"."""
+    if not value or len(value) > 2000 or " " in value or "\\" in value or any(ord(c) < 32 for c in value):
+        return "/"
+    if value.startswith("/"):
+        return "/" if value.startswith("//") else value
+    parts = urlsplit(value)
+    if parts.scheme not in ("http", "https") or not parts.hostname or not parts.hostname.isascii():
+        return "/"
+    if parts.username is not None or parts.password is not None:  # https://good.example@evil.example
+        return "/"
+    if parts.scheme == "http" and _secure():
+        return "/"
+    try:
+        parts.port  # raises on a malformed port
+    except ValueError:
+        return "/"
+    return value if _host_allowed(parts.hostname) else "/"
 
 
 def _b64(data: bytes) -> str:
@@ -191,7 +232,7 @@ def callback(request: Request, code: Optional[str] = None, state: Optional[str] 
     response = RedirectResponse(safe_next(pending.get("next")), status_code=302)
     response.set_cookie(
         auth.oidc_cookie_name(), id_token, max_age=max(1, int(claims["exp"] - time.time())),
-        httponly=True, samesite="lax", secure=_secure(), path="/",
+        httponly=True, samesite="lax", secure=_secure(), path="/", domain=settings.OIDC_COOKIE_DOMAIN or None,
     )
     response.delete_cookie(LOGIN_COOKIE, path="/auth")
     response.headers["Cache-Control"] = "no-store"
@@ -203,7 +244,8 @@ def logout(request: Request):
     if not enabled():
         raise HTTPException(status_code=404, detail="Not found")
     id_token = request.cookies.get(auth.oidc_cookie_name() or "")
-    home = _base_url(request) + "/"
+    path = settings.OIDC_LOGOUT_RETURN_PATH or "/"
+    home = _base_url(request) + (path if path.startswith("/") and not path.startswith("//") and "\\" not in path else "/")
     target = home
     try:
         end_session = _discovery().get("end_session_endpoint")
@@ -215,16 +257,32 @@ def logout(request: Request):
             params["id_token_hint"] = id_token
         target = f"{end_session}?{urlencode(params)}"
     response = RedirectResponse(target, status_code=302)
-    response.delete_cookie(auth.oidc_cookie_name(), path="/")
+    response.delete_cookie(auth.oidc_cookie_name(), path="/", domain=settings.OIDC_COOKIE_DOMAIN or None)
     response.headers["Cache-Control"] = "no-store"
     return response
 
 
+def _front_door() -> Optional[str]:
+    """The front door's login address when THIS app should use it (not when this is the front door)."""
+    login_url = settings.OIDC_LOGIN_URL
+    return login_url if login_url and auth.oidc_configured() else None
+
+
+def _is_front_door_host(request: Request, login_url: str) -> bool:
+    host = (request.headers.get("host") or request.url.netloc).split(":")[0].lower()
+    return (urlsplit(login_url).hostname or "").lower() == host
+
+
 def redirect_if_signed_out(request: Request, dev_user_email: str = "") -> Optional[Response]:
     """For an app's HTML pages: a redirect to the sign-in when this visitor isn't signed
-    in, or None to carry on. Does nothing unless the sign-in flow is configured, and
-    never locally without a session (development uses the configured dev user)."""
-    if not enabled():
+    in, or None to carry on. With OIDC_LOGIN_URL set the sign-in is the front door's (and the
+    page the visitor wanted rides along as a full address to come back to); otherwise this app's
+    own, if configured. Does nothing when neither is, and never locally without a session
+    (development uses the configured dev user)."""
+    login_url = _front_door()
+    if login_url and _is_front_door_host(request, login_url):
+        login_url = None  # the front door itself signs people in directly
+    if not login_url and not enabled():
         return None
     try:
         auth.request_email(request, dev_user_email)
@@ -233,4 +291,22 @@ def redirect_if_signed_out(request: Request, dev_user_email: str = "") -> Option
         if exc.status_code != 401:
             return None
     target = request.url.path + (f"?{request.url.query}" if request.url.query else "")
+    if login_url:
+        host = request.headers.get("host") or request.url.netloc
+        wanted = f"{'https' if _secure() else request.url.scheme}://{host}{target}"
+        joiner = "&" if "?" in login_url else "?"
+        return RedirectResponse(f"{login_url}{joiner}{urlencode({'next': wanted})}", status_code=302)
     return RedirectResponse(f"/auth/login?{urlencode({'next': safe_next(target)})}", status_code=302)
+
+
+def logout_url(request: Request) -> Optional[str]:
+    """Where this app's Log out link should go, or None for the page's default (Cloudflare
+    Access). Someone who came through Cloudflare logs out there; otherwise it is the front
+    door's /auth/logout (ending the session for every app), or this app's own."""
+    if request.headers.get(auth.JWT_HEADER):
+        return None
+    login_url = _front_door()
+    if login_url and not _is_front_door_host(request, login_url):
+        base = login_url.split("?")[0].rstrip("/")
+        return (base[: -len("/login")] if base.endswith("/login") else base.rsplit("/", 1)[0]) + "/logout"
+    return "/auth/logout" if enabled() else None
