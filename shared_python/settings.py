@@ -68,6 +68,11 @@ OIDC_LOGIN_URL = os.environ.get("OIDC_LOGIN_URL")
 # Front door only: the page on its own site that people land on after logging out (a path; register
 # the full address in the provider's allowed logout URLs). Default "/".
 OIDC_LOGOUT_RETURN_PATH = os.environ.get("OIDC_LOGOUT_RETURN_PATH", "/")
+# The plain pages the sign-in routes show (an expired sign-in, a missing email verification, ...) are drawn with
+# the shared look (theme, logo) and this name. SHARED_ASSETS_BASE defaults to the real host in production and to
+# the local one otherwise.
+BRAND_NAME = os.environ.get("BRAND_NAME", "Brassworks")
+SHARED_ASSETS_BASE = os.environ.get("SHARED_ASSETS_BASE")
 
 # --- letting new people in (shared_python.cloudflare) ----------------------
 # The API token needs only "Access: Organizations, Identity Providers, and Groups

@@ -405,3 +405,28 @@ def test_other_denial_text_from_the_provider_is_never_shown(front):
     client, _ = front
     resp = client.get("/auth/callback", params={"error": "access_denied", "error_description": "<b>hello</b> visit evil.com"})
     assert resp.status_code == 400 and "evil.com" not in resp.text and "<b>" not in resp.text
+
+
+# --- the explanation pages are drawn in the shared look ------------------------------------------------------
+
+
+def test_the_explanation_pages_use_the_shared_theme_logo_and_brand_name(front):
+    client, provider = front
+    provider.verified = False
+    html = sign_in(client, provider, "/").text
+    assert 'data-ui="v2"' in html and "https://static.evancooperman.com/theme.css" in html
+    assert "https://static.evancooperman.com/logo.svg" in html and "<h1>Brassworks</h1>" in html
+    assert 'class="save-btn"' in html
+
+
+def test_the_shared_look_comes_from_the_local_host_outside_production(monkeypatch):
+    monkeypatch.setattr(settings, "ENV", "local")
+    assert "http://127.0.0.1:8070/theme.css" in oidc_login._page("t", "m").body.decode()
+
+
+def test_the_brand_name_and_assets_host_are_settings_and_are_escaped(monkeypatch):
+    monkeypatch.setattr(settings, "BRAND_NAME", "<b>Acme</b>")
+    monkeypatch.setattr(settings, "SHARED_ASSETS_BASE", "https://assets.example.org/")
+    html = oidc_login._page("Title <i>", "Message <script>x</script>").body.decode()
+    assert "<b>Acme</b>" not in html and "&lt;b&gt;Acme&lt;/b&gt;" in html
+    assert "https://assets.example.org/theme.css" in html and "<script>x" not in html and "<i>" not in html

@@ -133,15 +133,44 @@ def _unb64(text: str) -> bytes:
     return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
 
 
+def _assets_base() -> str:
+    if settings.SHARED_ASSETS_BASE:
+        return settings.SHARED_ASSETS_BASE.rstrip("/")
+    return "https://static.evancooperman.com" if _secure() else "http://127.0.0.1:8070"
+
+
 def _page(title: str, message: str, status: int = 400, retry_next: str = "/", retry_label: str = "Try signing in again") -> HTMLResponse:
-    """A plain explanation (these routes have no template of their own)."""
+    """A short explanation in the shared look (these routes have no template of their own). Everything
+    that goes into it is escaped."""
     retry = "/auth/login" + (f"?{urlencode({'next': retry_next})}" if retry_next and retry_next != "/" else "")
-    body = (
-        f"<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
-        f"<title>{escape(title)}</title>"
-        f"<body style='font-family:system-ui,sans-serif;max-width:32rem;margin:15vh auto;padding:0 1rem'>"
-        f"<h1>{escape(title)}</h1><p>{escape(message)}</p><p><a href='{escape(retry)}'>{escape(retry_label)}</a></p></body>"
-    )
+    base, brand = escape(_assets_base()), escape(settings.BRAND_NAME or "")
+    body = f"""<!doctype html>
+<html lang="en" data-ui="v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{brand} - {escape(title)}</title>
+  <link rel="stylesheet" href="{base}/theme.css">
+  <link rel="icon" type="image/svg+xml" href="{base}/logo.svg">
+  <link rel="icon" type="image/png" sizes="64x64" href="{base}/favicon.png">
+  <script src="{base}/theme-init.js"></script>
+</head>
+<body>
+  <header class="app-header">
+    <h1>{brand}</h1>
+  </header>
+  <main>
+    <section class="section">
+      <h2>{escape(title)}</h2>
+      <p>{escape(message)}</p>
+      <p><a class="save-btn" href="{escape(retry)}" data-btn-icon="arrow-right">{escape(retry_label)}</a></p>
+    </section>
+  </main>
+  <script src="{base}/theme.js"></script>
+  <script src="{base}/icons.js"></script>
+</body>
+</html>
+"""
     return HTMLResponse(body, status_code=status, headers={"Cache-Control": "no-store"})
 
 
