@@ -35,3 +35,4 @@ jobs:
             sudo systemctl restart trip-planning
             sudo systemctl restart dashboard
             sudo systemctl restart social-planning
+            sudo systemctl restart time-management
