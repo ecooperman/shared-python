@@ -187,7 +187,7 @@ def _verify_email_page(email: Optional[str], retry_next: str) -> HTMLResponse:
 
 
 @router.get("/auth/login")
-def login(request: Request, next: str = "/", login_hint: Optional[str] = None):
+def login(request: Request, next: str = "/", login_hint: Optional[str] = None, screen_hint: Optional[str] = None):
     if not enabled():
         raise HTTPException(status_code=404, detail="Not found")
     try:
@@ -208,6 +208,8 @@ def login(request: Request, next: str = "/", login_hint: Optional[str] = None):
     }
     if login_hint and len(login_hint) < 255:
         params["login_hint"] = login_hint
+    if screen_hint == "signup":  # open the provider's create-an-account screen (nothing else is passed through)
+        params["screen_hint"] = "signup"
     pending = {"state": state, "nonce": nonce, "verifier": verifier, "next": safe_next(next)}
     response = RedirectResponse(f"{endpoint}?{urlencode(params)}", status_code=302)
     response.set_cookie(

@@ -294,14 +294,69 @@ def test_telling_someone_they_were_let_in_does_nothing_without_a_server_and_neve
     assert smtp.instances == []
 
 
-def test_through_the_front_door_the_new_person_is_told_to_use_a_passkey_google_or_a_password(smtp, monkeypatch):
-    _configure_smtp(monkeypatch)
+def _front_door(monkeypatch):
     monkeypatch.setattr(settings, "OIDC_ISSUER", "https://login.example.com")
     monkeypatch.setattr(settings, "OIDC_LOGIN_URL", "https://dashboard.example.org/auth/login")
+
+
+def _links(body):
+    return [line for line in body.splitlines() if line.startswith("https://")]
+
+
+def test_through_the_front_door_a_new_person_gets_a_link_that_opens_account_creation(smtp, monkeypatch):
+    from urllib.parse import parse_qs, urlparse
+
+    _configure_smtp(monkeypatch)
+    _front_door(monkeypatch)
+    notify.tell_let_in("dana+x@example.com", "alice@example.com", "Lists", "https://lists.example.org/")
+    body = smtp.instances[0].log[-1][1].get_content()
+    signup, signin = _links(body)
+    parts = urlparse(signup)
+    assert f"{parts.scheme}://{parts.netloc}{parts.path}" == "https://dashboard.example.org/auth/login"
+    assert parse_qs(parts.query) == {"screen_hint": ["signup"], "login_hint": ["dana+x@example.com"], "next": ["https://lists.example.org/"]}
+    assert "%2B" in parts.query  # a plus in an address is encoded, not read as a space
+    assert signin == "https://lists.example.org/"  # the plain link, for anyone who already has an account
+    assert "Create your account" in body and "passkey" in body and "Already have an account?" in body
+    assert "one-time PIN" not in body and "dana+x@example.com" in body
+
+
+def test_a_new_person_shared_a_list_also_gets_it_and_comes_back_to_it(smtp, monkeypatch):
+    from urllib.parse import parse_qs, urlparse
+
+    _configure_smtp(monkeypatch)
+    _front_door(monkeypatch)
+    notify.tell_given_access("dana@example.com", "alice@example.com", "list", "Gifts", "https://lists.example.org/list.html?id=3", "view", True, "Lists")
+    body = smtp.instances[0].log[-1][1].get_content()
+    signup, signin = _links(body)
+    assert parse_qs(urlparse(signup).query)["next"] == ["https://lists.example.org/list.html?id=3"]
+    assert signin == "https://lists.example.org/list.html?id=3"
+    assert body.count("https://lists.example.org/list.html?id=3") == 1  # plain once; inside the sign-up link it is encoded
+
+
+def test_someone_who_already_signs_in_here_just_gets_the_link_to_open_it(smtp, monkeypatch):
+    _configure_smtp(monkeypatch)
+    _front_door(monkeypatch)
+    notify.tell_given_access("dana@example.com", "alice@example.com", "list", "Gifts", "https://lists.example.org/list.html?id=3", "view", False, "Lists")
+    body = smtp.instances[0].log[-1][1].get_content()
+    assert "Open it here: https://lists.example.org/list.html?id=3" in body
+    assert _links(body) == [] and "Create your account" not in body and "screen_hint" not in body
+
+
+def test_without_a_link_to_open_the_sign_up_link_still_works(smtp, monkeypatch):
+    from urllib.parse import parse_qs, urlparse
+
+    _configure_smtp(monkeypatch)
+    _front_door(monkeypatch)
+    notify.tell_let_in("dana@example.com", "alice@example.com", "Lists", None)
+    signup = _links(smtp.instances[0].log[-1][1].get_content())
+    assert len(signup) == 1 and "next" not in parse_qs(urlparse(signup[0]).query)
+
+
+def test_apps_still_behind_cloudflare_get_no_account_link(smtp, monkeypatch):
+    _configure_smtp(monkeypatch)
     notify.tell_let_in("dana@example.com", "alice@example.com", "Lists", "https://lists.example")
     body = smtp.instances[0].log[-1][1].get_content()
-    assert "\n    dana@example.com\n" in body and "passkey" in body and "Google" in body
-    assert "one-time PIN" not in body  # that was Cloudflare's way in
+    assert "screen_hint" not in body and "Create your account" not in body and "Open it here: https://lists.example" in body
 
 
 def test_the_pin_wording_remains_for_apps_still_behind_cloudflare(smtp, monkeypatch):

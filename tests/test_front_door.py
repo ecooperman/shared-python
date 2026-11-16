@@ -430,3 +430,41 @@ def test_the_brand_name_and_assets_host_are_settings_and_are_escaped(monkeypatch
     html = oidc_login._page("Title <i>", "Message <script>x</script>").body.decode()
     assert "<b>Acme</b>" not in html and "&lt;b&gt;Acme&lt;/b&gt;" in html
     assert "https://assets.example.org/theme.css" in html and "<script>x" not in html and "<i>" not in html
+
+
+# --- the create-an-account screen can be asked for -----------------------------------------------------------
+
+
+def _authorize_query(client, **params):
+    resp = client.get("/auth/login", params=params)
+    return {k: v[0] for k, v in parse_qs(urlparse(resp.headers["location"]).query).items()}
+
+
+def test_login_can_open_the_create_an_account_screen_with_the_email_filled_in(front):
+    client, _ = front
+    query = _authorize_query(client, screen_hint="signup", login_hint="dana+x@example.com")
+    assert query["screen_hint"] == "signup" and query["login_hint"] == "dana+x@example.com"
+
+
+@pytest.mark.parametrize("value", ["login", "signup&prompt=none", "<script>", "SIGNUP", ""])
+def test_no_other_screen_hint_is_ever_passed_to_the_provider(front, value):
+    client, _ = front
+    assert "screen_hint" not in _authorize_query(client, screen_hint=value)
+
+
+def test_a_normal_login_asks_for_no_particular_screen(front):
+    client, _ = front
+    assert "screen_hint" not in _authorize_query(client)
+
+
+def test_the_link_in_an_invite_email_is_accepted_by_the_front_door(front):
+    """The invite's return address must pass the front door's own allow-list, or the person lands on the home page."""
+    client, provider = front
+    from shared_python import notify
+
+    link = notify.create_account_url("dana@example.com", "https://lists.example.org/list.html?id=3")
+    assert link is None  # not configured as an app here: this is the front door itself
+    start = _authorize_query(client, screen_hint="signup", login_hint="dana@example.com", next="https://lists.example.org/list.html?id=3")
+    provider.nonce = start["nonce"]
+    back = client.get("/auth/callback", params={"code": "c", "state": start["state"]})
+    assert back.headers["location"] == "https://lists.example.org/list.html?id=3"

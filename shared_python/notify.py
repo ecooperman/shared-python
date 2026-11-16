@@ -7,6 +7,7 @@ import logging
 import smtplib
 from email.message import EmailMessage
 from typing import Optional
+from urllib.parse import urlencode
 
 import requests
 
@@ -113,19 +114,33 @@ def invite_requested(app_name: str, inviter_email: str, invitee_email: str, role
     )
 
 
-def _sign_in_lines(to: str) -> list:
+def create_account_url(to: str, open_url: Optional[str]) -> Optional[str]:
+    """The front door's sign-in with the create-an-account screen open and the invited address filled in,
+    coming back to `open_url` afterwards. None unless sign-in is through the front door."""
+    if not auth.front_door_active():
+        return None
+    query = {"screen_hint": "signup", "login_hint": to}
+    if open_url:
+        query["next"] = open_url
+    return f"{settings.OIDC_LOGIN_URL}{'&' if '?' in settings.OIDC_LOGIN_URL else '?'}{urlencode(query)}"
+
+
+def _sign_in_lines(to: str, open_url: Optional[str] = None) -> list:
     """For someone who has never signed in here: name the address to use, since it has to be
-    the one they were let in as. Through the shared front door (Auth0) they can sign up with a
-    passkey, Google or a password; through Cloudflare Access they are emailed a one-time PIN."""
-    if auth.front_door_active():
-        return [
+    the one they were let in as. Through the shared front door (Auth0) a new person gets a link that
+    opens the create-an-account screen with their address filled in, and a plain link for anyone who
+    already has an account; through Cloudflare Access they are emailed a one-time PIN."""
+    signup = create_account_url(to, open_url)
+    if signup:
+        lines = [
             "",
-            "The first time you open it you'll be asked to sign in or create an account. Please use this email address:",
-            "",
-            f"    {to}",
-            "",
-            "A passkey is the quickest way (nothing to remember), or you can use Google or a password.",
+            "New here? Create your account with this address (a passkey is the quickest way, or use Google or a password):",
+            signup,
         ]
+        if open_url:
+            lines += ["", "Already have an account? Sign in and open it here:", open_url]
+        lines += ["", f"Please use this email address either way, since it's the one you were let in as: {to}"]
+        return lines
     return [
         "",
         "The first time you open it you'll be asked to sign in. Enter this email address:",
@@ -155,10 +170,13 @@ def tell_given_access(
     reaches the caller."""
     can = "edit" if role == "edit" else "view"
     lines = [f'{inviter_email} gave you access to the {kind} "{name}" in {app_name} - you can {can} it.']
-    if open_url:
-        lines += ["", f"Open it here: {open_url}"]
-    if new_person:
-        lines += _sign_in_lines(to)
+    if new_person and auth.front_door_active():
+        lines += _sign_in_lines(to, open_url)  # carries the open link itself, as the "already have an account" one
+    else:
+        if open_url:
+            lines += ["", f"Open it here: {open_url}"]
+        if new_person:
+            lines += _sign_in_lines(to)
     try:
         send_email(to, f'{inviter_email} shared "{name}" with you', "\n".join(lines))
     except Exception as exc:  # noqa: BLE001 - never fail the approval or the add that triggered this
@@ -170,9 +188,12 @@ def tell_let_in(to: str, inviter_email: str, app_name: str, open_url: Optional[s
     to one shared thing) - by email, with how to sign in, since they have never used
     it. Best effort, like tell_given_access(): a failure is logged, never raised."""
     lines = [f"{inviter_email} invited you to {app_name}, and an administrator has approved it."]
-    if open_url:
-        lines += ["", f"Open it here: {open_url}"]
-    lines += _sign_in_lines(to)
+    if auth.front_door_active():
+        lines += _sign_in_lines(to, open_url)  # carries the open link itself, as the "already have an account" one
+    else:
+        if open_url:
+            lines += ["", f"Open it here: {open_url}"]
+        lines += _sign_in_lines(to)
     try:
         send_email(to, f"{inviter_email} invited you to {app_name}", "\n".join(lines))
     except Exception as exc:  # noqa: BLE001
