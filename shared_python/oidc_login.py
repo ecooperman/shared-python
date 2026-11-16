@@ -133,15 +133,28 @@ def _unb64(text: str) -> bytes:
     return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
 
 
-def _page(title: str, message: str, status: int = 400) -> HTMLResponse:
+def _page(title: str, message: str, status: int = 400, retry_next: str = "/", retry_label: str = "Try signing in again") -> HTMLResponse:
     """A plain explanation (these routes have no template of their own)."""
+    retry = "/auth/login" + (f"?{urlencode({'next': retry_next})}" if retry_next and retry_next != "/" else "")
     body = (
         f"<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
         f"<title>{escape(title)}</title>"
         f"<body style='font-family:system-ui,sans-serif;max-width:32rem;margin:15vh auto;padding:0 1rem'>"
-        f"<h1>{escape(title)}</h1><p>{escape(message)}</p><p><a href='/auth/login'>Try signing in again</a></p></body>"
+        f"<h1>{escape(title)}</h1><p>{escape(message)}</p><p><a href='{escape(retry)}'>{escape(retry_label)}</a></p></body>"
     )
     return HTMLResponse(body, status_code=status, headers={"Cache-Control": "no-store"})
+
+
+def _verify_email_page(email: Optional[str], retry_next: str) -> HTMLResponse:
+    """Signed in at the provider, but the email address has not been confirmed yet: tell the person what to
+    do instead of leaving them at a dead end. (Apps identify people by email, so an unproven address
+    never signs anyone in.)"""
+    where = f"We sent a message to {email}." if email else "We sent you a message."
+    return _page(
+        "Please verify your email",
+        f"{where} Open it and confirm your address, then sign in again. If you can't find it, check your junk folder.",
+        403, retry_next=retry_next, retry_label="I've verified it - sign in again",
+    )
 
 
 @router.get("/auth/login")
@@ -188,13 +201,16 @@ def _pending(request: Request) -> Optional[dict]:
 
 
 @router.get("/auth/callback")
-def callback(request: Request, code: Optional[str] = None, state: Optional[str] = None, error: Optional[str] = None):
+def callback(request: Request, code: Optional[str] = None, state: Optional[str] = None, error: Optional[str] = None,
+             error_description: Optional[str] = None):
     if not enabled():
         raise HTTPException(status_code=404, detail="Not found")
     if error:
         # The provider said no (e.g. the person cancelled, or may not use this app). Say so plainly;
         # the provider's description can contain anything, so it is only logged.
         log.warning("Identity provider returned an error at sign-in: %s", error[:80])
+        if error_description == "email_not_verified":  # a provider rule can deny with this exact code
+            return _verify_email_page(None, safe_next((_pending(request) or {}).get("next")))
         return _page("Sign-in didn't complete", "The sign-in was cancelled or refused.", 400)
     pending = _pending(request)
     if not pending or not code or not state or not hmac.compare_digest(str(pending.get("state", "")), state):
@@ -225,6 +241,8 @@ def callback(request: Request, code: Optional[str] = None, state: Optional[str] 
         claims = auth.oidc_claims(id_token, [settings.OIDC_CLIENT_ID])
         if not hmac.compare_digest(str(claims.get("nonce", "")), str(pending.get("nonce", ""))):
             raise HTTPException(status_code=401, detail="Sign-in token was not issued for this sign-in")
+        if auth.email_unverified(claims) and isinstance(claims.get(settings.OIDC_EMAIL_CLAIM), str):
+            return _verify_email_page(claims[settings.OIDC_EMAIL_CLAIM], safe_next(pending.get("next")))
         auth.email_from_claims(claims)
     except HTTPException as exc:
         return _page("Sign-in didn't complete", str(exc.detail), 401)

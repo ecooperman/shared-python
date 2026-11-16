@@ -156,6 +156,11 @@ def oidc_claims(token: str, audience: list) -> dict:
         raise HTTPException(status_code=401, detail="Invalid sign-in token")
 
 
+def email_unverified(claims: dict) -> bool:
+    """The provider says this email address has not been proven to belong to the person."""
+    return claims.get("email_verified") is False or str(claims.get("email_verified")).lower() == "false"
+
+
 def email_from_claims(claims: dict) -> str:
     email = claims.get(settings.OIDC_EMAIL_CLAIM)
     if not email or not isinstance(email, str):
@@ -164,7 +169,7 @@ def email_from_claims(claims: dict) -> str:
             settings.OIDC_EMAIL_CLAIM,
         )
         raise HTTPException(status_code=401, detail="Sign-in token has no email")
-    if claims.get("email_verified") is False or str(claims.get("email_verified")).lower() == "false":
+    if email_unverified(claims):
         # Apps identify people by email, so an address nobody proved they own must not sign anyone in.
         raise HTTPException(status_code=401, detail="Your email address hasn't been verified")
     return email

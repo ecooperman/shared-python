@@ -289,7 +289,8 @@ def test_an_expired_id_token_is_refused(client, provider):
 def test_an_unverified_email_never_signs_anyone_in(client, provider):
     _, q = start(client, provider)
     provider.claims = {"email_verified": False}
-    assert finish(client, q).status_code == 401
+    resp = finish(client, q)
+    assert resp.status_code == 403 and "oidc_session" not in resp.headers.get("set-cookie", "")  # told what to do, not signed in
 
 
 def test_an_id_token_with_no_email_is_refused(client, provider):

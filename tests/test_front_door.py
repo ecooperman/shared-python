@@ -125,6 +125,8 @@ class Provider:
     def __init__(self, key):
         self.key = key
         self.nonce = None
+        self.verified = True
+        self.email = "alice@example.com"
 
     def get(self, url, **kw):
         return _Reply(200, {
@@ -133,8 +135,8 @@ class Provider:
         })
 
     def post(self, url, data=None, **kw):
-        claims = {"iss": ISSUER + "/", "aud": CLIENT, "exp": int(time.time()) + 3600, "email": "alice@example.com",
-                  "email_verified": True, "nonce": self.nonce}
+        claims = {"iss": ISSUER + "/", "aud": CLIENT, "exp": int(time.time()) + 3600, "email": self.email,
+                  "email_verified": self.verified, "nonce": self.nonce}
         return _Reply(200, {"id_token": jwt.encode(claims, self.key, algorithm="RS256")})
 
 
@@ -368,3 +370,38 @@ def test_the_front_door_check_compares_host_and_port(login, host, same):
             netloc = host
 
     assert oidc_login._is_front_door_host(Req(), login) is same
+
+
+# --- an unverified email is explained, not a dead end --------------------------------------------------------
+
+
+def test_an_unverified_email_gets_a_helpful_page_and_no_session(front):
+    client, provider = front
+    provider.verified = False
+    resp = sign_in(client, provider, "https://lists.example.org/list.html?id=3")
+    assert resp.status_code == 403 and "Please verify your email" in resp.text
+    assert "alice@example.com" in resp.text and "junk folder" in resp.text
+    assert "oidc_session" not in resp.headers.get("set-cookie", "")
+    assert "next=https%3A%2F%2Flists.example.org%2Flist.html%3Fid%3D3" in resp.text  # sign in again comes back to the same place
+
+
+def test_the_unverified_page_escapes_the_email_and_cannot_be_pointed_elsewhere(front):
+    client, provider = front
+    provider.verified = False
+    provider.email = "<script>alert(1)</script>@example.com"
+    resp = sign_in(client, provider, "https://evil.example.com/steal")
+    assert "<script>alert(1)" not in resp.text and "evil.example.com" not in resp.text
+
+
+def test_a_provider_rule_can_deny_with_the_not_verified_code_and_gets_the_same_help(front):
+    client, provider = front
+    resp = client.get("/auth/login", params={"next": "/"})
+    state = parse_qs(urlparse(resp.headers["location"]).query)["state"][0]
+    resp = client.get("/auth/callback", params={"error": "access_denied", "error_description": "email_not_verified", "state": state})
+    assert resp.status_code == 403 and "Please verify your email" in resp.text
+
+
+def test_other_denial_text_from_the_provider_is_never_shown(front):
+    client, _ = front
+    resp = client.get("/auth/callback", params={"error": "access_denied", "error_description": "<b>hello</b> visit evil.com"})
+    assert resp.status_code == 400 and "evil.com" not in resp.text and "<b>" not in resp.text
