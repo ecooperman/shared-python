@@ -36,3 +36,4 @@ jobs:
             sudo systemctl restart dashboard
             sudo systemctl restart social-planning
             sudo systemctl restart time-management
+            sudo systemctl restart finances
