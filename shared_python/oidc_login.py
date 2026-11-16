@@ -139,10 +139,11 @@ def _assets_base() -> str:
     return "https://static.evancooperman.com" if _secure() else "http://127.0.0.1:8070"
 
 
-def _page(title: str, message: str, status: int = 400, retry_next: str = "/", retry_label: str = "Try signing in again") -> HTMLResponse:
+def _page(title: str, message: str, status: int = 400, retry_next: str = "/", retry_label: str = "Try signing in again",
+          href: Optional[str] = None) -> HTMLResponse:
     """A short explanation in the shared look (these routes have no template of their own). Everything
     that goes into it is escaped."""
-    retry = "/auth/login" + (f"?{urlencode({'next': retry_next})}" if retry_next and retry_next != "/" else "")
+    retry = href or ("/auth/login" + (f"?{urlencode({'next': retry_next})}" if retry_next and retry_next != "/" else ""))
     base, brand = escape(_assets_base()), escape(settings.BRAND_NAME or "")
     body = f"""<!doctype html>
 <html lang="en" data-ui="v2">
@@ -172,6 +173,16 @@ def _page(title: str, message: str, status: int = 400, retry_next: str = "/", re
 </html>
 """
     return HTMLResponse(body, status_code=status, headers={"Cache-Control": "no-store"})
+
+
+def not_allowed_page(email: str, request: Request) -> HTMLResponse:
+    """For someone who is signed in but is not allowed into a private app: say so, and offer to sign out (they
+    most likely used the wrong address)."""
+    return _page(
+        "This app is private",
+        f"You're signed in as {email}, which doesn't have access here. If that's the wrong address, sign out and sign in again with the right one.",
+        403, retry_label="Sign out", href=logout_url(request) or "/cdn-cgi/access/logout",
+    )
 
 
 def _verify_email_page(email: Optional[str], retry_next: str) -> HTMLResponse:
