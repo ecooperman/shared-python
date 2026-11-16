@@ -68,6 +68,11 @@ OIDC_LOGIN_URL = os.environ.get("OIDC_LOGIN_URL")
 # Front door only: the page on its own site that people land on after logging out (a path; register
 # the full address in the provider's allowed logout URLs). Default "/".
 OIDC_LOGOUT_RETURN_PATH = os.environ.get("OIDC_LOGOUT_RETURN_PATH", "/")
+# --- cross-app request forgery (shared_python.csrf) ---------------------------------------------------
+# Exact origins (comma-separated) allowed to make state-changing requests with the person's cookie although they
+# are not the app's own pages: an installed extension, for instance ("chrome-extension://<its id>"). Empty by
+# default: nothing is trusted unless it is listed. A refused request is logged with the origin that was refused.
+CSRF_TRUSTED_ORIGINS = os.environ.get("CSRF_TRUSTED_ORIGINS")
 # The plain pages the sign-in routes show (an expired sign-in, a missing email verification, ...) are drawn with
 # the shared look (theme, logo) and this name. SHARED_ASSETS_BASE defaults to the real host in production and to
 # the local one otherwise.

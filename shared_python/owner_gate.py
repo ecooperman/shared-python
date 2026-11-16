@@ -25,7 +25,7 @@ from typing import Callable, Iterable, Optional
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from . import auth, oidc_login, settings
+from . import auth, csrf, oidc_login, settings
 
 log = logging.getLogger(__name__)
 
@@ -52,7 +52,8 @@ def install(
     service_access: Optional[Callable[[Request], bool]] = None,
     public_paths: Iterable[str] = (),
 ) -> None:
-    """Register the gate on `app`. `admin_emails` is called per request so a changed setting is seen."""
+    """Register the gate on `app`. `admin_emails` is called per request so a changed setting is seen. Also turns
+    on the cross-site request guard (shared_python.csrf), which always applies to a private app."""
     public_paths = tuple(public_paths)
 
     @app.middleware("http")
@@ -80,3 +81,5 @@ def install(
                 return oidc_login.not_allowed_page(email, request)
             return JSONResponse({"detail": "This app is private"}, status_code=403, headers={"Cache-Control": "no-store"})
         return await call_next(request)
+
+    csrf.install(app)  # registered last, so it runs first: a cross-site change is refused before anything else
