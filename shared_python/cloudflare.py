@@ -17,7 +17,7 @@ import threading
 
 import requests
 
-from . import settings
+from . import auth, settings
 
 log = logging.getLogger(__name__)
 
@@ -82,6 +82,8 @@ def is_let_in(email: str, admin_emails):
     ask because Cloudflare isn't configured (local development, or before it's
     set up) - the caller goes by what it knows itself. Read-only. Raises
     CloudflareError if Cloudflare can't be asked."""
+    if auth.front_door_active():
+        return None  # Cloudflare's gate is not what lets people in here: the app's own account is all there is
     if not configured():
         return None
     if email in admin_emails:
@@ -91,7 +93,12 @@ def is_let_in(email: str, admin_emails):
 
 def allow_email(email: str) -> None:
     """Make sure `email` is in the Invitees group. Already being there is fine.
-    Raises NotConfigured (production only), SeatCapReached or CloudflareError."""
+    Raises NotConfigured (production only), SeatCapReached or CloudflareError.
+    Does nothing once the app signs in through the shared front door (auth.front_door_active): there is
+    no Cloudflare gate to let anyone through, and so no seat cap either."""
+    if auth.front_door_active():
+        log.info("Sign-in is through the front door; not adding %s to Cloudflare's allowed group", email)
+        return
     if not configured():
         if settings.ENV == "production":
             log.error("CF_API_TOKEN, CF_ACCOUNT_ID and CF_INVITEES_GROUP_ID must be set to approve invites")

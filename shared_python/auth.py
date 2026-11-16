@@ -84,6 +84,12 @@ def oidc_configured() -> bool:
     return bool(oidc_issuers())
 
 
+def front_door_active() -> bool:
+    """This app signs people in through the shared front door (the dashboard) rather than Cloudflare Access:
+    OIDC_LOGIN_URL and an issuer are set. Then the Cloudflare login gate is not what lets people in."""
+    return bool(settings.OIDC_LOGIN_URL) and oidc_configured()
+
+
 def oidc_cookie_name() -> Optional[str]:
     """The cookie the signed-in person's token travels in: OIDC_COOKIE if a provider
     delivers one, else our own (when this app does the sign-in itself)."""

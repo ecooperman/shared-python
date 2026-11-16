@@ -7,7 +7,7 @@ import smtplib
 import pytest
 import requests
 
-from shared_python import notify
+from shared_python import notify, settings
 from shared_python import settings as config
 
 
@@ -292,3 +292,19 @@ def test_the_email_to_someone_let_into_the_app_says_how_to_sign_in(smtp, monkeyp
 def test_telling_someone_they_were_let_in_does_nothing_without_a_server_and_never_raises(smtp):
     notify.tell_let_in("a@example.com", "b@example.com", "Notes", None)
     assert smtp.instances == []
+
+
+def test_through_the_front_door_the_new_person_is_told_to_use_a_passkey_google_or_a_password(smtp, monkeypatch):
+    _configure_smtp(monkeypatch)
+    monkeypatch.setattr(settings, "OIDC_ISSUER", "https://login.example.com")
+    monkeypatch.setattr(settings, "OIDC_LOGIN_URL", "https://dashboard.example.org/auth/login")
+    notify.tell_let_in("dana@example.com", "alice@example.com", "Lists", "https://lists.example")
+    body = smtp.instances[0].log[-1][1].get_content()
+    assert "\n    dana@example.com\n" in body and "passkey" in body and "Google" in body
+    assert "one-time PIN" not in body  # that was Cloudflare's way in
+
+
+def test_the_pin_wording_remains_for_apps_still_behind_cloudflare(smtp, monkeypatch):
+    _configure_smtp(monkeypatch)
+    notify.tell_let_in("dana@example.com", "alice@example.com", "Lists", "https://lists.example")
+    assert "one-time PIN" in smtp.instances[0].log[-1][1].get_content()

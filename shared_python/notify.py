@@ -10,7 +10,7 @@ from typing import Optional
 
 import requests
 
-from . import settings
+from . import auth, settings
 
 log = logging.getLogger(__name__)
 
@@ -114,9 +114,18 @@ def invite_requested(app_name: str, inviter_email: str, invitee_email: str, role
 
 
 def _sign_in_lines(to: str) -> list:
-    """For someone who has never signed in here: Cloudflare's sign-in page can't be
-    pre-filled from a link, so name the address to type there - it has to be this
-    one, the one they were let in as."""
+    """For someone who has never signed in here: name the address to use, since it has to be
+    the one they were let in as. Through the shared front door (Auth0) they can sign up with a
+    passkey, Google or a password; through Cloudflare Access they are emailed a one-time PIN."""
+    if auth.front_door_active():
+        return [
+            "",
+            "The first time you open it you'll be asked to sign in or create an account. Please use this email address:",
+            "",
+            f"    {to}",
+            "",
+            "A passkey is the quickest way (nothing to remember), or you can use Google or a password.",
+        ]
     return [
         "",
         "The first time you open it you'll be asked to sign in. Enter this email address:",
@@ -141,7 +150,7 @@ def tell_given_access(
     since they may never have used the app and can't be expected to have anything
     set up for push. `kind` ("list", "trip") and `name` say what was shared,
     `open_url` is a link straight to it (or None), `app_name` is for the wording.
-    `new_person`: they haven't signed in here before, so say how (Cloudflare emails
+    `new_person`: they haven't signed in here before, so say how (a passkey, Google or password through the front door, or Cloudflare emailing
     them a one-time PIN). Best effort, like notify(): a failure is logged and never
     reaches the caller."""
     can = "edit" if role == "edit" else "view"

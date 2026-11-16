@@ -197,3 +197,38 @@ def test_a_group_we_cant_read_is_an_error_not_a_no(configured, monkeypatch):
     )
     with pytest.raises(cloudflare.CloudflareError):
         cloudflare.is_let_in("old@example.com", set())
+
+
+# --- once the app signs in through the shared front door, Cloudflare is out of the picture ------------------
+
+
+@pytest.fixture()
+def front_door(monkeypatch):
+    monkeypatch.setattr(config, "OIDC_ISSUER", "https://login.example.com")
+    monkeypatch.setattr(config, "OIDC_LOGIN_URL", "https://dashboard.example.org/auth/login")
+
+
+def test_approving_does_not_touch_cloudflare_when_the_front_door_is_in_use(group, front_door):
+    cloudflare.allow_email("new@example.com")
+    assert group["calls"] == []  # no read, no write
+
+
+def test_the_seat_cap_does_not_apply_when_the_front_door_is_in_use(group, front_door, monkeypatch):
+    monkeypatch.setattr(config, "ACCESS_SEAT_CAP", 1)  # the group already holds more than that
+    cloudflare.allow_email("new@example.com")  # would raise SeatCapReached through Cloudflare
+
+
+def test_in_production_an_unconfigured_cloudflare_is_not_an_error_behind_the_front_door(front_door, monkeypatch):
+    monkeypatch.setattr(config, "ENV", "production")
+    cloudflare.allow_email("new@example.com")  # without the front door this raises NotConfigured
+
+
+def test_nobody_is_asked_about_cloudflares_group_behind_the_front_door(group, front_door):
+    assert cloudflare.is_let_in("someone@example.com", {"admin@example.com"}) is None
+    assert group["calls"] == []
+
+
+def test_cloudflare_is_still_used_when_only_part_of_the_front_door_is_configured(group, monkeypatch):
+    monkeypatch.setattr(config, "OIDC_LOGIN_URL", "https://dashboard.example.org/auth/login")  # no issuer
+    cloudflare.allow_email("new@example.com")
+    assert group["calls"]  # it did call Cloudflare
