@@ -426,6 +426,16 @@ def _front_door() -> Optional[str]:
     return login_url if login_url and auth.oidc_configured() else None
 
 
+def dashboard_url() -> Optional[str]:
+    """The dashboard's home page (where people ask for an app they have no account in), when this app sits behind the
+    shared front door; None otherwise (Cloudflare Access, or no sign-in configured), when there is nowhere to send them."""
+    login_url = _front_door()
+    if not login_url:
+        return None
+    parts = urlsplit(login_url)
+    return f"{parts.scheme}://{parts.netloc}/" if parts.scheme in ("http", "https") and parts.netloc else None
+
+
 def _netloc(host: str, scheme: str) -> str:
     """A host[:port] with the scheme's default port dropped, lowercased, so two spellings compare equal."""
     host = host.lower()

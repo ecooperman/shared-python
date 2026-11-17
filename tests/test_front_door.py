@@ -468,3 +468,27 @@ def test_the_link_in_an_invite_email_is_accepted_by_the_front_door(front):
     provider.nonce = start["nonce"]
     back = client.get("/auth/callback", params={"code": "c", "state": start["state"]})
     assert back.headers["location"] == "https://lists.example.org/list.html?id=3"
+
+
+# --- where the dashboard is, for pointing people at it ---------------------------------------------------------------------
+
+
+def test_the_dashboard_address_is_the_front_doors_home_page(monkeypatch):
+    monkeypatch.setattr(settings, "OIDC_ISSUER", ISSUER)
+    monkeypatch.setattr(settings, "OIDC_LOGIN_URL", FRONT + "/auth/login")
+    assert oidc_login.dashboard_url() == FRONT + "/"
+    monkeypatch.setattr(settings, "OIDC_LOGIN_URL", "http://localhost:8090/auth/login?x=1")
+    assert oidc_login.dashboard_url() == "http://localhost:8090/"
+
+
+@pytest.mark.parametrize("login_url", [None, "", "javascript:alert(1)", "//evil.example/auth/login", "/auth/login", "ftp://x.example/auth/login"])
+def test_there_is_no_dashboard_address_without_a_real_web_front_door(monkeypatch, login_url):
+    monkeypatch.setattr(settings, "OIDC_ISSUER", ISSUER)
+    monkeypatch.setattr(settings, "OIDC_LOGIN_URL", login_url)
+    assert oidc_login.dashboard_url() is None
+
+
+def test_there_is_no_dashboard_address_when_sign_in_is_not_configured(monkeypatch):
+    monkeypatch.setattr(settings, "OIDC_ISSUER", None)
+    monkeypatch.setattr(settings, "OIDC_LOGIN_URL", FRONT + "/auth/login")
+    assert oidc_login.dashboard_url() is None

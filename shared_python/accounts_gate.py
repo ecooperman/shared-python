@@ -21,6 +21,7 @@ Cross-site changes are refused first (shared_python.csrf). `require_admin` and `
 """
 import logging
 from dataclasses import dataclass
+from html import escape
 from typing import Callable, Iterable, Optional, Union
 
 from fastapi import HTTPException, Request
@@ -45,6 +46,18 @@ NO_ACCESS = {
     "removed": "Your access to this app has been removed. Ask the administrator if you think that's a mistake.",
 }
 HEADINGS = {"none": "You don't have access yet", "removed": "Your access was removed"}
+
+
+def _ask_for_access(problem: str) -> str:
+    """For someone who never had an account: a pointer to the dashboard, where they can ask for it. (Someone whose access was
+    removed is told to ask the administrator instead; and with no dashboard in front of this app there is nowhere to point.)"""
+    url = oidc_login.dashboard_url()
+    if problem != "none" or not url:
+        return ""
+    return (
+        '      <p>You can ask for access from your dashboard; an administrator will see your request.</p>\n'
+        f'      <p><a class="secondary-btn" href="{escape(url)}" data-btn-icon="unlock">Ask for access</a></p>'
+    )
 
 
 def _wants_a_page(request: Request) -> bool:
@@ -101,6 +114,7 @@ def install(
                     return oidc_login._page(
                         HEADINGS[problem], f"{NO_ACCESS[problem]} You're signed in as {email}; if that's the wrong address, sign out and sign in again.",
                         403, retry_label="Sign out", href=oidc_login.logout_url(request) or "/cdn-cgi/access/logout",
+                        extra_html=_ask_for_access(problem),
                     )
                 return JSONResponse({"detail": NO_ACCESS[problem]}, status_code=403, headers={"Cache-Control": "no-store"})
             account = found

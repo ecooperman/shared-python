@@ -186,6 +186,21 @@ def test_a_signed_in_person_with_no_account_gets_nothing_and_a_way_to_sign_out(p
         assert resp.status_code == 403 and "alice-note" not in resp.text and "bob-note" not in resp.text
 
 
+def test_someone_with_no_account_is_pointed_at_the_dashboard_to_ask(production, key):
+    page = as_person(production, key, "stranger@example.com").get("/")
+    assert f'href="{FRONT}/"' in page.text and "Ask for access" in page.text and "ask for access from your dashboard" in page.text
+
+
+def test_the_ask_link_is_only_for_people_who_never_had_an_account_and_only_with_a_dashboard(production, key, monkeypatch):
+    removed = as_person(production, key, "gone@example.com").get("/")
+    assert "access was removed" in removed.text and "Ask for access" not in removed.text  # they ask the administrator instead
+    assert "Ask for access" not in as_person(production, key, "stranger@example.com").get("/api/notes").text  # the API stays plain JSON
+    monkeypatch.setattr(settings, "OIDC_LOGIN_URL", None)  # nothing in front of this app: nowhere to send them
+    monkeypatch.setattr(settings, "OIDC_COOKIE", "oidc_session")  # (the session cookie still signs them in)
+    page = as_person(production, key, "stranger@example.com").get("/")
+    assert page.status_code == 403 and "have access yet" in page.text and "Ask for access" not in page.text
+
+
 def test_a_person_whose_access_was_removed_is_told_so_and_gets_nothing(production, key):
     c = as_person(production, key, "gone@example.com")
     page = c.get("/")
