@@ -26,6 +26,11 @@ administrators (`is_let_in(email, admin_emails)`), the app's name, and the links
 emails. Each app keeps a thin `app/notify.py` and `app/auth.py` with its own wording
 and its own user table, and calls into this.
 
+`directory.known_emails()` is the one place an app learns about people in the OTHER apps: it opens each sibling
+app's database read-only (they sit side by side, `/opt/apps/<repo>` on the droplet) and returns the addresses in their
+`users` tables, for an administrator's "add a person" autocomplete. No tokens, no network, nothing written. Never show
+the result to an ordinary person: it says who else uses the apps. `PEOPLE_APPS_DIR` overrides where it looks.
+
 ## Using it in an app
 
 ```
