@@ -321,10 +321,14 @@ def test_raw_sql_is_not_filtered_which_is_why_apps_must_not_use_it_on_owned_tabl
         assert len(db.execute(text("select * from notes")).all()) == 4  # the filter cannot see inside raw SQL
 
 
-def test_known_limit_a_bare_exists_is_not_filtered_which_the_lint_rejects(db):
+def test_known_limit_a_bare_exists_may_not_be_filtered_so_the_lint_rejects_it_and_the_safe_form_always_is(db):
+    """SQLAlchemy 2.0 does not see a model inside a bare exists().where(Note.col == x), so it is not filtered there
+    (2.1 does filter it). Apps must not depend on either, so the lint rejects the bare form (next test) and the safe
+    form, which is filtered on every version, is what apps use."""
     bobs = _id_of(db, "bob-1")
     with owned.scope(ALICE):
-        assert db.query(exists().where(Note.id == bobs)).scalar() is True  # SQLAlchemy does not see a model in it
+        assert db.query(select(Note.id).where(Note.id == bobs).exists()).scalar() is False
+        assert db.query(db.query(Note).filter(Note.id == bobs).exists()).scalar() is False
 
 
 def test_the_lint_rejects_a_bare_exists_and_from_statement_but_not_the_safe_forms(tmp_path):

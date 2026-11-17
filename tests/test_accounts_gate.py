@@ -11,7 +11,6 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 from sqlalchemy import Column, Integer, String, create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
-from sqlalchemy.pool import StaticPool
 
 from shared_python import accounts_gate, auth, owned, settings
 from shared_python.accounts_gate import Account
@@ -42,8 +41,10 @@ owned.install()
 
 
 @pytest.fixture()
-def world(monkeypatch):
-    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+def world(monkeypatch, tmp_path):
+    # A real file with the usual connection pool, like the apps: each request thread gets its OWN connection. (A single
+    # in-memory connection shared by every thread at once is not safe in SQLite and corrupts concurrent results.)
+    engine = create_engine(f"sqlite:///{tmp_path / 'world.db'}", connect_args={"check_same_thread": False})
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
     with owned.unscoped():
