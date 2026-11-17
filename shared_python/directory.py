@@ -28,6 +28,9 @@ APP_DATABASES = {
     "finances": "finances.db",
 }
 
+# The dashboard keeps people's first and last names in its own file (dashboard/app/people.py); read here the same way.
+NAMES_DATABASE = ("dashboard", "people.db")
+
 # Placeholder owners parked on pre-account data until an administrator signs in (never a real person).
 _PLACEHOLDER_SUFFIX = ".invalid"
 
@@ -45,6 +48,29 @@ def _emails_in(database: Path) -> List[str]:
         return [row[0] for row in connection.execute("SELECT email FROM users")]
     finally:
         connection.close()
+
+
+def _names_in(database: Path) -> dict:
+    connection = sqlite3.connect(f"{database.resolve().as_uri()}?mode=ro", uri=True, timeout=2)
+    try:
+        rows = connection.execute("SELECT email, first_name, last_name FROM names")
+        return {e.strip().lower(): " ".join(part for part in (f, l) if part) for e, f, l in rows}
+    finally:
+        connection.close()
+
+
+def known_people(extra: Optional[Iterable[str]] = None, base: Optional[Path] = None) -> List[dict]:
+    """Like known_emails, but each person as {"email", "name"} (name is "" when nobody has given one), sorted by email.
+    Names come from the dashboard's own file, read-only; without it everyone just has no name."""
+    base = base or apps_dir()
+    names = {}
+    path = base / NAMES_DATABASE[0] / NAMES_DATABASE[1]
+    if path.is_file():
+        try:
+            names = _names_in(path)
+        except sqlite3.Error as exc:
+            log.warning("Could not read people's names: %s", exc)
+    return [{"email": e, "name": names.get(e, "")} for e in known_emails(extra=extra, base=base)]
 
 
 def known_emails(extra: Optional[Iterable[str]] = None, base: Optional[Path] = None) -> List[str]:

@@ -60,3 +60,33 @@ def test_default_folder_is_the_parent_of_the_running_app(monkeypatch, tmp_path):
     assert directory.apps_dir() == tmp_path.resolve() or directory.apps_dir() == tmp_path
     monkeypatch.setenv("PEOPLE_APPS_DIR", "/somewhere")
     assert str(directory.apps_dir()) == "/somewhere"
+
+
+def make_names(base, rows):
+    (base / "dashboard").mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(base / "dashboard" / "people.db")
+    connection.execute("CREATE TABLE names (email TEXT PRIMARY KEY, first_name TEXT NOT NULL DEFAULT '', last_name TEXT NOT NULL DEFAULT '')")
+    connection.executemany("INSERT INTO names VALUES (?, ?, ?)", rows)
+    connection.commit()
+    connection.close()
+
+
+def test_people_come_with_their_names_when_the_dashboard_has_them(tmp_path):
+    make_db(tmp_path, "lists", "gifts.db", ["ann@x.com", "bob@x.com", "cy@x.com"])
+    make_names(tmp_path, [("ann@x.com", "Ann", "Lee"), ("bob@x.com", "Bob", ""), ("someone-else@x.com", "No", "Account")])
+    assert directory.known_people(base=tmp_path) == [
+        {"email": "ann@x.com", "name": "Ann Lee"}, {"email": "bob@x.com", "name": "Bob"}, {"email": "cy@x.com", "name": ""}]
+
+
+def test_without_the_names_file_everyone_just_has_no_name(tmp_path):
+    make_db(tmp_path, "lists", "gifts.db", ["ann@x.com"])
+    assert directory.known_people(base=tmp_path) == [{"email": "ann@x.com", "name": ""}]
+    assert not (tmp_path / "dashboard").exists()  # read-only: never created
+
+
+def test_an_unreadable_names_file_is_skipped_not_fatal(tmp_path, caplog):
+    make_db(tmp_path, "lists", "gifts.db", ["ann@x.com"])
+    (tmp_path / "dashboard").mkdir()
+    (tmp_path / "dashboard" / "people.db").write_text("garbage")
+    assert directory.known_people(base=tmp_path) == [{"email": "ann@x.com", "name": ""}]
+    assert "Could not read people's names" in caplog.text
