@@ -10,6 +10,8 @@ query in the app to remember `.filter(owner_id == me)`, the filter is applied BE
   read anyone's data by accident.
 * New rows get their owner filled in from the scope. A write that would put a row in someone else's name, move a
   row to another person, or change or delete a row that belongs to someone else raises instead of happening.
+* A row may not point at another person's row (a foreign key or relationship to a category, folder, job... that is
+  someone else's): that raises too, whatever id a request names.
 * `unscoped()` is the explicit, greppable way out, for migrations and account administration only.
 
 This is the second line of defence. The first is that routes ask only for the signed-in person's own things, and
@@ -27,8 +29,9 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import Iterable, Optional
 
-from sqlalchemy import Column, ForeignKey, Integer, event, false
-from sqlalchemy.orm import Session, attributes, declared_attr, with_loader_criteria
+from sqlalchemy import Column, ForeignKey, Integer, event, false, select
+from sqlalchemy import inspect as sa_inspect
+from sqlalchemy.orm import MANYTOONE, Session, attributes, declared_attr, with_loader_criteria
 
 
 class NoOwner(RuntimeError):
@@ -117,6 +120,34 @@ def _guard_writes(session, flush_context, instances) -> None:
     for obj in session.deleted:
         if isinstance(obj, OwnedMixin) and (owner is None or obj.owner_id != owner):
             raise WrongOwner(f"Refusing to delete a {type(obj).__name__} that is not this person's")
+    # Last, once every new row has its owner: nothing of this person's may POINT AT another person's row (a category,
+    # folder, job... named by id in a request). Apps still answer such a request with a clean 400/404 of their own;
+    # this is the backstop for the one that forgets.
+    for obj in list(session.new) + [o for o in session.dirty if session.is_modified(o, include_collections=False)]:
+        if isinstance(obj, OwnedMixin):
+            _check_references(session, obj)
+
+
+def _check_references(session, obj) -> None:
+    state = sa_inspect(obj)
+    mapper = state.mapper
+    for fk in mapper.local_table.foreign_keys:
+        parent = fk.column.table
+        if fk.parent.name == "owner_id" or "owner_id" not in parent.c:
+            continue
+        attr = mapper.get_property_by_column(fk.parent).key
+        value = getattr(obj, attr, None)
+        if value is None or not (state.key is None or attributes.get_history(obj, attr).has_changes()):
+            continue
+        found = session.connection().execute(select(parent.c.owner_id).where(fk.column == value)).scalar()
+        if found is not None and found != obj.owner_id:
+            raise WrongOwner(f"Refusing to link a {type(obj).__name__} to another person's {parent.name} row")
+    for rel in mapper.relationships:
+        if rel.direction is not MANYTOONE:
+            continue
+        target = state.dict.get(rel.key)
+        if isinstance(target, OwnedMixin) and target.owner_id is not None and target.owner_id != obj.owner_id:
+            raise WrongOwner(f"Refusing to link a {type(obj).__name__} to another person's {type(target).__name__}")
 
 
 _installed = False

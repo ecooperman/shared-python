@@ -364,3 +364,61 @@ def test_a_row_cannot_be_taken_over_by_changing_its_owner_to_yourself(db):
         db.rollback()
     with owned.unscoped():
         assert db.query(Note).filter_by(title="bob-1").one().owner_id == BOB
+
+
+# --- nothing of one person's may point at another person's row ---------------------------------------------------------------
+
+
+def _folder_id(db, name):
+    other = sessionmaker(bind=db.get_bind())()
+    try:
+        with owned.unscoped():
+            return other.query(Folder).filter_by(name=name).one().id
+    finally:
+        other.close()
+
+
+def test_a_new_row_cannot_point_at_another_persons_row_by_id(db):
+    bobs_folder = _folder_id(db, "bob-folder")
+    with owned.scope(ALICE):
+        db.add(Note(title="sneaky", folder_id=bobs_folder))
+        with pytest.raises(owned.WrongOwner):
+            db.flush()
+    db.rollback()
+    with owned.unscoped():
+        assert db.query(Note).filter_by(title="sneaky").count() == 0
+
+
+def test_an_existing_row_cannot_be_repointed_at_another_persons_row(db):
+    bobs_folder = _folder_id(db, "bob-folder")
+    with owned.scope(ALICE):
+        note = db.query(Note).filter_by(title="alice-2").one()
+        note.folder_id = bobs_folder
+        with pytest.raises(owned.WrongOwner):
+            db.flush()
+    db.rollback()
+    with owned.unscoped():
+        assert db.query(Note).filter_by(title="alice-2").one().folder_id is None
+
+
+def test_a_row_cannot_point_at_another_persons_object_through_a_relationship(db):
+    with owned.unscoped():
+        bobs = db.query(Folder).filter_by(name="bob-folder").one()
+    with owned.scope(ALICE):
+        db.add(Note(title="sneaky-2", folder=bobs))
+        with pytest.raises(owned.WrongOwner):
+            db.flush()
+    db.rollback()
+
+
+def test_a_row_can_point_at_the_persons_own_rows_and_at_ones_made_in_the_same_flush(db):
+    alices = _folder_id(db, "alice-folder")
+    with owned.scope(ALICE):
+        db.add(Note(title="fine", folder_id=alices))
+        db.add(Note(title="fine-too", folder=Folder(name="brand-new")))  # parent and child created together
+        db.commit()
+        assert titles(db.query(Note).filter(Note.title.like("fine%")).all()) == ["fine", "fine-too"]
+        note = db.query(Note).filter_by(title="fine").one()
+        note.folder_id = None
+        note.title = "renamed"
+        db.commit()
