@@ -26,6 +26,7 @@ APP_DATABASES = {
     "social-planning": "ideas.db",
     "time-management": "tasks.db",
     "finances": "finances.db",
+    "resume": "access.db",
 }
 
 # The dashboard keeps people's first and last names in its own file (dashboard/app/people.py); read here the same way.

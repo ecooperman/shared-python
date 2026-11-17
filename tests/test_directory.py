@@ -19,7 +19,8 @@ def test_collects_everyone_from_every_app_without_repeats(tmp_path):
     make_db(tmp_path, "lists", "gifts.db", ["Ann@x.com", "bob@x.com"])
     make_db(tmp_path, "trip-planning", "trips.db", ["bob@x.com", "cy@x.com"])
     make_db(tmp_path, "finances", "finances.db", ["dee@x.com"])
-    assert directory.known_emails(base=tmp_path) == ["ann@x.com", "bob@x.com", "cy@x.com", "dee@x.com"]
+    make_db(tmp_path, "resume", "access.db", ["fay@x.com", "legacy-owner@resume.invalid"])
+    assert directory.known_emails(base=tmp_path) == ["ann@x.com", "bob@x.com", "cy@x.com", "dee@x.com", "fay@x.com"]
 
 
 def test_placeholders_and_junk_are_left_out(tmp_path):
