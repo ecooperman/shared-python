@@ -68,6 +68,14 @@ OIDC_LOGIN_URL = os.environ.get("OIDC_LOGIN_URL")
 # Front door only: the page on its own site that people land on after logging out (a path; register
 # the full address in the provider's allowed logout URLs). Default "/".
 OIDC_LOGOUT_RETURN_PATH = os.environ.get("OIDC_LOGOUT_RETURN_PATH", "/")
+# --- resending the verification email (Auth0 only, optional; shared_python.oidc_login) -----------------------------
+# Someone who signed up but has not confirmed their email sees a "check your email" page; with these three set it also
+# offers "Resend the email". They belong to a Machine-to-Machine application in Auth0 authorised for the Management API
+# with only the update:users scope. Front door only, and the secret lives only in the front door's own env file (never
+# shared.env, which every app reads). Domain = the tenant's own address ("your-tenant.us.auth0.com"), not the custom one.
+AUTH0_MGMT_DOMAIN = os.environ.get("AUTH0_MGMT_DOMAIN")
+AUTH0_MGMT_CLIENT_ID = os.environ.get("AUTH0_MGMT_CLIENT_ID")
+AUTH0_MGMT_CLIENT_SECRET = os.environ.get("AUTH0_MGMT_CLIENT_SECRET")
 # --- cross-app request forgery (shared_python.csrf) ---------------------------------------------------
 # Exact origins (comma-separated) allowed to make state-changing requests with the person's cookie although they
 # are not the app's own pages: an installed extension, for instance ("chrome-extension://<its id>"). Empty by

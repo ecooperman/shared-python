@@ -390,3 +390,157 @@ def test_either_of_two_configured_issuers_signs_people_in_and_the_first_is_where
     assert prod.get("/who", headers={"Authorization": f"Bearer {make(other)}"}).status_code == 200
     assert prod.get("/who", headers={"Authorization": f"Bearer {make('https://evil.example.com')}"}).status_code == 401
     assert prod.get("/auth/login").headers["location"].startswith(ISSUER + "/authorize?")
+
+
+# --- sending the confirmation email again -------------------------------------------------------------
+# Someone who signed up but has not confirmed their address stops at "please verify your email". With the Auth0
+# management settings the page also offers "Resend the email". Who it is sent to comes only from the signed ID token
+# that stop left in a cookie, never from the request.
+
+TENANT = "tenant.us.auth0.com"
+
+
+class Auth0Management:
+    """Stands in for Auth0's token endpoint and Management API, next to the sign-in provider."""
+
+    def __init__(self, provider):
+        self.provider, self.token_requests, self.jobs, self.job_status = provider, [], [], 201
+
+    def post(self, url, data=None, json=None, headers=None, **kw):
+        if url == f"https://{TENANT}/oauth/token":
+            self.token_requests.append(json)
+            return _Reply(200, {"access_token": "mgmt-token", "expires_in": 3600})
+        if url == f"https://{TENANT}/api/v2/jobs/verification-email":
+            self.jobs.append({"body": json, "headers": headers})
+            return _Reply(self.job_status, {"id": "job_1"})
+        return self.provider.post(url, data=data, **kw)
+
+
+@pytest.fixture()
+def mgmt(provider, monkeypatch):
+    m = Auth0Management(provider)
+    monkeypatch.setattr(requests, "post", m.post)
+    monkeypatch.setattr(settings, "AUTH0_MGMT_DOMAIN", TENANT)
+    monkeypatch.setattr(settings, "AUTH0_MGMT_CLIENT_ID", "mgmt-client")
+    monkeypatch.setattr(settings, "AUTH0_MGMT_CLIENT_SECRET", "mgmt-secret")
+    oidc_login._mgmt_token.clear()
+    oidc_login._resend_log.clear()
+    oidc_login._resend_times.clear()
+    return m
+
+
+def stop_at_verify(client, provider, sub="auth0|alice", email="alice@example.com", **params):
+    _, q = start(client, provider, **params)
+    provider.claims = {"email_verified": False, "sub": sub, "email": email}
+    resp = finish(client, q)
+    assert resp.status_code == 403
+    return resp
+
+
+def token_for(key, **claims):
+    body = {"iss": ISSUER + "/", "aud": CLIENT, "exp": int(time.time()) + 600, "email": "alice@example.com",
+            "email_verified": False, "sub": "auth0|alice", **claims}
+    return jwt.encode(body, key, algorithm="RS256")
+
+
+def test_without_the_management_settings_the_page_offers_no_resend(client, provider):
+    resp = stop_at_verify(client, provider)
+    assert "Resend" not in resp.text and "oidc_verify" not in resp.headers.get("set-cookie", "")
+    assert client.post("/auth/resend-verification").status_code == 404
+
+
+def test_the_verify_page_offers_a_resend_and_leaves_a_cookie_that_is_not_a_session(client, provider, mgmt):
+    resp = stop_at_verify(client, provider, next="/list.html?id=3")
+    assert "Resend the email" in resp.text and "alice@example.com" in resp.text
+    assert "next=%2Flist.html%3Fid%3D3" in resp.text
+    cookies = resp.headers.get_list("set-cookie")
+    verify = next(c.lower() for c in cookies if c.startswith("oidc_verify="))
+    assert "httponly" in verify and "path=/auth" in verify and "samesite=lax" in verify
+    assert not any(c.startswith("oidc_session=") for c in cookies)
+
+
+def test_the_resend_cookie_never_works_as_a_sign_in(client, provider, mgmt, key):
+    client.cookies.set("oidc_session", token_for(key))
+    assert client.get("/who").status_code == 401
+
+
+def test_resend_asks_auth0_to_email_the_person_in_the_cookie_and_says_so(client, provider, mgmt):
+    stop_at_verify(client, provider)
+    resp = client.post("/auth/resend-verification")
+    assert resp.status_code == 200 and "sent it again" in resp.text and "Resend the email" in resp.text
+    assert mgmt.token_requests == [{"grant_type": "client_credentials", "client_id": "mgmt-client",
+                                    "client_secret": "mgmt-secret", "audience": f"https://{TENANT}/api/v2/"}]
+    job = mgmt.jobs[0]
+    assert job["body"] == {"user_id": "auth0|alice", "client_id": CLIENT}
+    assert job["headers"]["Authorization"] == "Bearer mgmt-token"
+
+
+def test_who_gets_the_email_cannot_be_chosen_by_the_request(client, provider, mgmt):
+    stop_at_verify(client, provider)
+    client.post("/auth/resend-verification?user_id=auth0|victim&email=v@example.com", json={"user_id": "auth0|victim"})
+    assert [j["body"]["user_id"] for j in mgmt.jobs] == ["auth0|alice"]
+
+
+def test_a_visit_with_no_cookie_sends_nothing(client, provider, mgmt):
+    resp = client.post("/auth/resend-verification")
+    assert resp.status_code == 400 and not mgmt.jobs and not mgmt.token_requests
+
+
+def test_a_forged_or_foreign_cookie_sends_nothing(client, provider, mgmt):
+    other = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    client.cookies.set("oidc_verify", token_for(other))  # signed by someone else
+    assert client.post("/auth/resend-verification").status_code == 400
+    client.cookies.set("oidc_verify", token_for(provider.key, exp=int(time.time()) - 5))  # expired
+    assert client.post("/auth/resend-verification").status_code == 400
+    client.cookies.set("oidc_verify", token_for(provider.key, aud="another-app"))
+    assert client.post("/auth/resend-verification").status_code == 400
+    client.cookies.set("oidc_verify", "not-a-token")
+    assert client.post("/auth/resend-verification").status_code == 400
+    assert not mgmt.jobs and not mgmt.token_requests
+
+
+def test_someone_whose_email_is_already_confirmed_is_not_emailed(client, provider, mgmt):
+    client.cookies.set("oidc_verify", token_for(provider.key, email_verified=True))
+    assert client.post("/auth/resend-verification").status_code == 400 and not mgmt.jobs
+
+
+def test_a_second_resend_within_a_minute_is_refused_but_another_person_is_not(client, provider, mgmt):
+    stop_at_verify(client, provider)
+    assert client.post("/auth/resend-verification").status_code == 200
+    again = client.post("/auth/resend-verification")
+    assert again.status_code == 429 and "give it a minute" in again.text and len(mgmt.jobs) == 1
+    stop_at_verify(client, provider, sub="auth0|bob", email="bob@example.com")
+    assert client.post("/auth/resend-verification").status_code == 200 and len(mgmt.jobs) == 2
+
+
+def test_all_resends_together_are_capped_per_hour(client, provider, mgmt, monkeypatch):
+    monkeypatch.setattr(oidc_login, "RESEND_PER_HOUR", 2)
+    for n in range(3):
+        stop_at_verify(client, provider, sub=f"auth0|p{n}")
+        assert client.post("/auth/resend-verification").status_code == (200 if n < 2 else 429)
+    assert len(mgmt.jobs) == 2
+
+
+def test_when_auth0_refuses_the_person_is_told_and_may_try_again_at_once(client, provider, mgmt):
+    stop_at_verify(client, provider)
+    mgmt.job_status = 500
+    failed = client.post("/auth/resend-verification")
+    assert failed.status_code == 502 and "send it just now" in failed.text and "Resend the email" in failed.text
+    mgmt.job_status = 201
+    assert client.post("/auth/resend-verification").status_code == 200
+
+
+def test_the_way_back_keeps_where_they_were_going_but_never_leaves_the_site(client, provider, mgmt):
+    stop_at_verify(client, provider)
+    kept = client.post("/auth/resend-verification?next=/list.html%3Fid%3D3")
+    assert 'href="/auth/login?next=%2Flist.html%3Fid%3D3"' in kept.text
+    oidc_login._resend_log.clear()
+    away = client.post("/auth/resend-verification?next=https://evil.example/steal")
+    assert "evil.example" not in away.text and 'href="/"' not in away.text and 'href="/auth/login"' in away.text
+
+
+def test_the_management_token_is_reused_until_it_is_about_to_expire(client, provider, mgmt):
+    for n in range(2):
+        stop_at_verify(client, provider, sub=f"auth0|p{n}")
+        client.post("/auth/resend-verification")
+    assert len(mgmt.token_requests) == 1 and len(mgmt.jobs) == 2

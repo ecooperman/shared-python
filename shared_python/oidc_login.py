@@ -14,6 +14,8 @@ and sends signed-out visitors to /auth/login (see `redirect_if_signed_out`).
   ID token, which is verified and then kept in an httponly cookie. The same cookie is
   what `shared_python.auth.request_email` reads on every later request.
 * GET /auth/logout - clears the cookie and ends the provider's session too.
+* POST /auth/resend-verification - for someone who signed up but has not confirmed their email: sends the confirmation
+  email again (Auth0 only; needs the AUTH0_MGMT_* settings, otherwise the page just doesn't offer it).
 
 The cookie is host-only (each app signs in separately, and the provider's own session
 makes the second app's sign-in instant). Its lifetime is the ID token's.
@@ -51,6 +53,9 @@ router = APIRouter()
 
 LOGIN_COOKIE = "oidc_login"  # state, nonce and PKCE verifier while the person is at the provider
 LOGIN_COOKIE_SECONDS = 600
+VERIFY_COOKIE = "oidc_verify"  # the ID token of someone whose email is not confirmed yet: only ever proves who to resend to
+RESEND_EVERY_SECONDS = 60  # per person
+RESEND_PER_HOUR = 30  # in all
 _DISCOVERY_SECONDS = 3600
 _discovery_cache: dict = {}
 
@@ -140,9 +145,9 @@ def _assets_base() -> str:
 
 
 def _page(title: str, message: str, status: int = 400, retry_next: str = "/", retry_label: str = "Try signing in again",
-          href: Optional[str] = None) -> HTMLResponse:
+          href: Optional[str] = None, extra_html: str = "") -> HTMLResponse:
     """A short explanation in the shared look (these routes have no template of their own). Everything
-    that goes into it is escaped."""
+    that goes into it is escaped (`extra_html` is the one exception: callers pass only markup they wrote)."""
     retry = href or ("/auth/login" + (f"?{urlencode({'next': retry_next})}" if retry_next and retry_next != "/" else ""))
     base, brand = escape(_assets_base()), escape(settings.BRAND_NAME or "")
     body = f"""<!doctype html>
@@ -165,6 +170,7 @@ def _page(title: str, message: str, status: int = 400, retry_next: str = "/", re
       <h2>{escape(title)}</h2>
       <p>{escape(message)}</p>
       <p><a class="save-btn" href="{escape(retry)}" data-btn-icon="arrow-right">{escape(retry_label)}</a></p>
+{extra_html}
     </section>
   </main>
   <script src="{base}/theme.js"></script>
@@ -185,16 +191,100 @@ def not_allowed_page(email: str, request: Request) -> HTMLResponse:
     )
 
 
-def _verify_email_page(email: Optional[str], retry_next: str) -> HTMLResponse:
+def _verify_email_page(email: Optional[str], retry_next: str, can_resend: bool = False, note: str = "",
+                       status: int = 403) -> HTMLResponse:
     """Signed in at the provider, but the email address has not been confirmed yet: tell the person what to
     do instead of leaving them at a dead end. (Apps identify people by email, so an unproven address
-    never signs anyone in.)"""
+    never signs anyone in.) With `can_resend` it also offers to send the confirmation email again."""
     where = f"We sent a message to {email}." if email else "We sent you a message."
+    resend = ""
+    if can_resend:
+        resend = (
+            f'<form method="post" action="/auth/resend-verification?{escape(urlencode({"next": retry_next}))}">'
+            '<button type="submit" class="secondary-btn" data-btn-icon="mail">Resend the email</button></form>'
+        )
     return _page(
         "Please verify your email",
-        f"{where} Open it and confirm your address, then sign in again. If you can't find it, check your junk folder.",
-        403, retry_next=retry_next, retry_label="I've verified it - sign in again",
+        f"{note + ' ' if note else ''}{where} Open it and confirm your address, then sign in again. If you can't find it, check your junk folder.",
+        status, retry_next=retry_next, retry_label="I've verified it - sign in again", extra_html=resend,
     )
+
+
+def _resend_configured() -> bool:
+    return bool(settings.AUTH0_MGMT_DOMAIN and settings.AUTH0_MGMT_CLIENT_ID and settings.AUTH0_MGMT_CLIENT_SECRET)
+
+
+_mgmt_token: dict = {}
+_resend_log: dict = {}  # user id -> when we last resent for them
+_resend_times: list = []  # when we resent at all, for the hourly cap
+
+
+def _management_token() -> str:
+    """A short-lived Management API token for the one scope we need, kept until shortly before it expires."""
+    if _mgmt_token.get("value") and _mgmt_token["expires"] > time.time() + 30:
+        return _mgmt_token["value"]
+    domain = settings.AUTH0_MGMT_DOMAIN
+    reply = requests.post(
+        f"https://{domain}/oauth/token",
+        json={
+            "grant_type": "client_credentials", "client_id": settings.AUTH0_MGMT_CLIENT_ID,
+            "client_secret": settings.AUTH0_MGMT_CLIENT_SECRET, "audience": f"https://{domain}/api/v2/",
+        },
+        timeout=10,
+    )
+    reply.raise_for_status()
+    body = reply.json()
+    _mgmt_token.update(value=body["access_token"], expires=time.time() + int(body.get("expires_in", 300)))
+    return _mgmt_token["value"]
+
+
+def _may_resend_now(user_id: str) -> bool:
+    now = time.time()
+    _resend_times[:] = [t for t in _resend_times if t > now - 3600]
+    for key in [k for k, t in _resend_log.items() if t <= now - RESEND_EVERY_SECONDS]:
+        del _resend_log[key]
+    if user_id in _resend_log or len(_resend_times) >= RESEND_PER_HOUR:
+        return False
+    _resend_log[user_id] = now
+    _resend_times.append(now)
+    return True
+
+
+@router.post("/auth/resend-verification")
+def resend_verification(request: Request):
+    """Send the confirmation email again to the person whose sign-in just stopped at "please verify your email". Who to
+    send it to comes only from the signed ID token that sign-in left in a short-lived cookie, never from the request, so
+    nobody can have a message sent to someone else."""
+    if not enabled() or not _resend_configured():
+        raise HTTPException(status_code=404, detail="Not found")
+    token = request.cookies.get(VERIFY_COOKIE)
+    try:
+        claims = auth.oidc_claims(token, [settings.OIDC_CLIENT_ID]) if token else None
+    except HTTPException:
+        claims = None
+    user_id = claims.get("sub") if claims else None
+    if not claims or not isinstance(user_id, str) or not user_id or not auth.email_unverified(claims):
+        return _page("That sign-in expired", "Sign in again and we'll take you back to this step.", 400)
+    email = claims.get(settings.OIDC_EMAIL_CLAIM)
+    email = email if isinstance(email, str) else None
+    back = safe_next(request.query_params.get("next"))  # carried through so the person still ends up where they were going
+    if not _may_resend_now(user_id):
+        return _verify_email_page(email, back, can_resend=True, status=429,
+                                  note="That was sent a moment ago, so give it a minute before asking again.")
+    try:
+        reply = requests.post(
+            f"https://{settings.AUTH0_MGMT_DOMAIN}/api/v2/jobs/verification-email",
+            json={"user_id": user_id, "client_id": settings.OIDC_CLIENT_ID},
+            headers={"Authorization": f"Bearer {_management_token()}"},
+            timeout=10,
+        )
+        reply.raise_for_status()
+    except (requests.RequestException, KeyError, ValueError) as exc:
+        log.error("Resending the verification email failed: %s", type(exc).__name__)
+        _resend_log.pop(user_id, None)  # a failed try should not lock them out for a minute
+        return _verify_email_page(email, back, can_resend=True, status=502,
+                                  note="We couldn't send it just now, so try again in a minute.")
+    return _verify_email_page(email, back, can_resend=True, status=200, note="We've sent it again.")
 
 
 @router.get("/auth/login")
@@ -284,7 +374,15 @@ def callback(request: Request, code: Optional[str] = None, state: Optional[str] 
         if not hmac.compare_digest(str(claims.get("nonce", "")), str(pending.get("nonce", ""))):
             raise HTTPException(status_code=401, detail="Sign-in token was not issued for this sign-in")
         if auth.email_unverified(claims) and isinstance(claims.get(settings.OIDC_EMAIL_CLAIM), str):
-            return _verify_email_page(claims[settings.OIDC_EMAIL_CLAIM], safe_next(pending.get("next")))
+            page = _verify_email_page(claims[settings.OIDC_EMAIL_CLAIM], safe_next(pending.get("next")),
+                                      can_resend=_resend_configured())
+            if _resend_configured():
+                # Kept only so "Resend the email" knows who asked. It is never read as a session: it has its own name,
+                # path and lifetime, and an unconfirmed address is refused everywhere a session is checked.
+                page.set_cookie(VERIFY_COOKIE, id_token, max_age=max(1, min(LOGIN_COOKIE_SECONDS, int(claims["exp"] - time.time()))),
+                                httponly=True, samesite="lax", secure=_secure(), path="/auth")
+            page.delete_cookie(LOGIN_COOKIE, path="/auth")
+            return page
         auth.email_from_claims(claims)
     except HTTPException as exc:
         return _page("Sign-in didn't complete", str(exc.detail), 401)
