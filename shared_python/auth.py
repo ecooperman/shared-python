@@ -18,6 +18,9 @@ Access (or is misconfigured) lets a visitor send any value they like, which woul
 signing in as anyone.
 """
 import logging
+import threading
+import time
+from contextlib import asynccontextmanager
 from typing import Optional
 
 import jwt
@@ -34,14 +37,18 @@ JWT_HEADER = "cf-access-jwt-assertion"
 _jwks_client: Optional[jwt.PyJWKClient] = None
 
 
-def _signing_key(token: str):
-    """Cloudflare's public key for this token (cached by PyJWKClient)."""
+def _cloudflare_key_client() -> jwt.PyJWKClient:
     global _jwks_client
     if _jwks_client is None:
         # Forgive a pasted "https://" or trailing slash - it's just a hostname.
         domain = settings.CF_TEAM_DOMAIN.strip().removeprefix("https://").removeprefix("http://").rstrip("/")
         _jwks_client = jwt.PyJWKClient(f"https://{domain}/cdn-cgi/access/certs", lifespan=3600)
-    return _jwks_client.get_signing_key_from_jwt(token).key
+    return _jwks_client
+
+
+def _signing_key(token: str):
+    """Cloudflare's public key for this token (cached by PyJWKClient)."""
+    return _cloudflare_key_client().get_signing_key_from_jwt(token).key
 
 
 def _email_from_verified_token(token: str) -> str:
@@ -124,17 +131,67 @@ def _issuer_for(token: str, issuers: list) -> str:
     return issuers[0]
 
 
-def _oidc_signing_key(token: str):
-    """The provider's public key for this token (keys cached by PyJWKClient)."""
+def _oidc_key_client(issuer: str) -> jwt.PyJWKClient:
+    """This issuer's key client (made once, then reused: it caches the keys for an hour)."""
     global _oidc_client
     if _oidc_client is None:
         _oidc_client = {}
-    issuer = _issuer_for(token, oidc_issuers())
     cache_key = (issuer, settings.OIDC_JWKS_URL)
     client = _oidc_client.get(cache_key)
     if client is None:
         client = _oidc_client[cache_key] = jwt.PyJWKClient(_oidc_jwks_url(issuer), lifespan=3600)
-    return client.get_signing_key_from_jwt(token).key
+    return client
+
+
+def _oidc_signing_key(token: str):
+    """The provider's public key for this token (keys cached by PyJWKClient)."""
+    return _oidc_key_client(_issuer_for(token, oidc_issuers())).get_signing_key_from_jwt(token).key
+
+
+# --- keeping the keys warm -----------------------------------------------------------------------------------------------
+# Checking a sign-in needs the provider's public keys, and finding them takes two web calls (its discovery document, then the
+# keys). Without this the FIRST person to load a page after every restart waits for both, in every app separately (and the
+# dashboard, which asks each app whether they have an account, can give up on a slow one). So each app fetches them in the
+# background as it starts, and again before the hour they are cached for runs out. Never fatal: if the provider can't be
+# reached, the first real request simply does what it always did.
+
+WARM_EVERY_SECONDS = 50 * 60  # the keys are cached for 60 minutes (lifespan above)
+
+
+def warm_up(refresh: bool = False) -> None:
+    """Fetch (or, with refresh, re-fetch) the signing keys for every configured provider now."""
+    if settings.CF_TEAM_DOMAIN and settings.CF_ACCESS_AUD:
+        try:
+            _cloudflare_key_client().get_jwk_set(refresh=refresh)
+        except Exception as exc:  # noqa: BLE001 - warming is best effort
+            log.warning("Could not pre-fetch Cloudflare's keys: %s", type(exc).__name__)
+    for issuer in oidc_issuers():
+        try:
+            _oidc_key_client(issuer).get_jwk_set(refresh=refresh)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Could not pre-fetch the sign-in keys for %s: %s", issuer, type(exc).__name__)
+
+
+def _keep_warm() -> None:
+    warm_up()
+    while True:
+        time.sleep(WARM_EVERY_SECONDS)
+        warm_up(refresh=True)
+
+
+def warm_up_on_start(app) -> None:
+    """Call once per app: when the app starts, begin fetching (and keeping fresh) the sign-in keys in a background thread, so
+    starting is not slowed and nobody's first page waits for them. Wraps the app's lifespan (the way current Starlette and
+    FastAPI run start-up code), keeping whatever lifespan or start-up handlers the app already has."""
+    previous = app.router.lifespan_context
+
+    @asynccontextmanager
+    async def lifespan(inner_app):
+        threading.Thread(target=_keep_warm, name="sign-in-key-warm-up", daemon=True).start()
+        async with previous(inner_app) as state:
+            yield state
+
+    app.router.lifespan_context = lifespan
 
 
 def oidc_claims(token: str, audience: list) -> dict:

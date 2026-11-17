@@ -83,3 +83,4 @@ def install(
         return await call_next(request)
 
     csrf.install(app)  # registered last, so it runs first: a cross-site change is refused before anything else
+    auth.warm_up_on_start(app)  # the sign-in keys are fetched in the background at start-up, not by the first visitor
