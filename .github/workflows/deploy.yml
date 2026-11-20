@@ -38,4 +38,5 @@ jobs:
             sudo systemctl restart time-management
             sudo systemctl restart finances
             sudo systemctl restart resume
-            sudo systemctl restart resume-admin
+            # The resume admin app runs inside "resume" now; the old separate unit may or may not still exist on the droplet.
+            sudo systemctl restart resume-admin || echo "resume-admin is not a separate service any more (see DEPLOYMENT.md)"
