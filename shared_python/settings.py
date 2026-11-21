@@ -18,6 +18,11 @@ def int_env(name: str, default: int) -> int:
 # "local" (default) or "production" (set once, droplet-wide, via systemd).
 ENV = os.environ.get("APP_ENV", "local")
 
+# Where an app tells the dashboard that someone's access to it changed (shared_python.access_events), so the apps list in every menu is
+# redrawn at once instead of when the dashboard's remembered answer runs out. On the droplet it is the dashboard's own process on this
+# machine; locally and in tests nothing is sent unless this is set.
+DASHBOARD_API_BASE = os.environ.get("DASHBOARD_API_BASE") or ("http://127.0.0.1:8090" if ENV == "production" else None)
+
 # --- who is signed in (shared_python.auth) ---------------------------------
 # Cloudflare Access signs everyone in before a request reaches an app and attaches
 # a signed token. In production both values are REQUIRED (the app refuses every

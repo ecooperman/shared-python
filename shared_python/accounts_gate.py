@@ -29,7 +29,7 @@ from fastapi import HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 
-from . import auth, csrf, oidc_login, owned
+from . import auth, csrf, oidc_login, owned, probe
 from .owner_gate import _is_public  # one definition of what may be public
 
 log = logging.getLogger(__name__)
@@ -123,7 +123,7 @@ def install(
                 return JSONResponse({"detail": NO_ACCESS[problem]}, status_code=403, headers={"Cache-Control": "no-store"})
             account = found
         request.state.account = account
-        if seen is not None and person_request and seen.due(account.id):
+        if seen is not None and person_request and not probe.is_probe(request) and seen.due(account.id):
             await run_in_threadpool(seen.record, account.id)  # a quick write, once an hour per person; never raises
         with owned.scope(account.id):
             return await call_next(request)
