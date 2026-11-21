@@ -18,6 +18,7 @@ deny) or "removed" (access was taken away). For each request:
    data is filtered to them below the app's own code (shared_python.owned), whatever the routes remember to do.
 
 Cross-site changes are refused first (shared_python.csrf). `require_admin` and `current_account` are for routes.
+An app may pass `seen=usage.LastSeen(SessionLocal)` to note when each person was last here (shared_python.usage).
 """
 import logging
 from dataclasses import dataclass
@@ -86,7 +87,9 @@ def install(
     dev_user_email: str,
     service_account: Optional[Callable[[Request], Optional[Account]]] = None,
     public_paths: Iterable[str] = (),
+    seen=None,
 ) -> None:
+    """`seen` is an optional `usage.LastSeen`: a signed-in PERSON (not a service-token call) is recorded as last seen, at most once an hour."""
     public_paths = tuple(public_paths)
 
     @app.middleware("http")
@@ -96,6 +99,7 @@ def install(
         account: Optional[Account] = None
         if service_account is not None:
             account = service_account(request)
+        person_request = account is None
         if account is None:
             try:
                 email = auth.request_email(request, dev_user_email).strip().lower()
@@ -119,6 +123,8 @@ def install(
                 return JSONResponse({"detail": NO_ACCESS[problem]}, status_code=403, headers={"Cache-Control": "no-store"})
             account = found
         request.state.account = account
+        if seen is not None and person_request and seen.due(account.id):
+            await run_in_threadpool(seen.record, account.id)  # a quick write, once an hour per person; never raises
         with owned.scope(account.id):
             return await call_next(request)
 
