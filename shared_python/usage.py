@@ -17,20 +17,25 @@ import time
 from datetime import datetime
 from typing import Callable, Dict, Optional, Tuple
 
-from sqlalchemy import DateTime, Integer, case, column, func, or_, select, table, update
+import requests
+
+from sqlalchemy import DateTime, Integer, String, case, column, func, or_, select, table, update
+
+from . import settings
 
 log = logging.getLogger(__name__)
 
 RECORD_EVERY_SECONDS = 3600
 
 # A lightweight handle on the columns every app's users table has: not an app model, so no app's ownership filter touches it.
-_users = table("users", column("id", Integer), column("last_seen_at", DateTime), column("active_days", Integer))
+_users = table("users", column("id", Integer), column("email", String), column("last_seen_at", DateTime), column("active_days", Integer))
 
 
 class LastSeen:
     """`LastSeen(SessionLocal)`; then `if seen.due(user_id): seen.record(user_id)` (in a worker thread, if the caller is async)."""
 
-    def __init__(self, session_factory: Callable, every_seconds: int = RECORD_EVERY_SECONDS, clock: Callable[[], float] = time.time):
+    def __init__(self, session_factory: Callable, every_seconds: int = RECORD_EVERY_SECONDS, clock: Callable[[], float] = time.time, app: Optional[str] = None):
+        self._app = app  # the app's key on the dashboard ("lists"); given, the dashboard is told about each person's first visit of a day
         self._session_factory = session_factory
         self._every = every_seconds
         self._clock = clock
@@ -59,12 +64,41 @@ class LastSeen:
             .where(_users.c.id == user_id)
             .values(active_days=case((or_(_users.c.last_seen_at.is_(None), _users.c.last_seen_at < today), days + 1), else_=days), last_seen_at=now)
         )
+        new_day, email = False, None
         try:
             with self._session_factory() as session:
+                before = session.execute(select(_users.c.last_seen_at).where(_users.c.id == user_id)).first()
+                new_day = before is not None and (before[0] is None or before[0] < today)  # their first visit of this (UTC) day
                 session.execute(statement)
                 session.commit()
+                if new_day and self._app:
+                    email = session.execute(select(_users.c.email).where(_users.c.id == user_id)).scalar()
         except Exception as exc:  # noqa: BLE001 - counting must never break the request that triggered it
             log.warning("Could not record when someone was last seen: %s", type(exc).__name__)
+        if email:
+            _announce(self._app, email, today)
+
+
+ACTIVE_DAY_PATH = "/internal/active-day"
+
+
+def _send_active_day(app: str, email: str, day: str) -> None:
+    base = settings.DASHBOARD_API_BASE
+    if not base:
+        return
+    try:
+        requests.post(base.rstrip("/") + ACTIVE_DAY_PATH, json={"app": app, "email": email, "day": day}, timeout=2)
+    except Exception as exc:  # noqa: BLE001 - the dashboard being away must never matter here
+        log.warning("Could not tell the dashboard about a day of use: %s", type(exc).__name__)
+
+
+def _announce(app: str, email: str, today: datetime) -> None:
+    """Tell the dashboard, in the background, that this person used `app` today (once per person per UTC day: that is the only time this is
+    called). The dashboard adds one to that day's count for the app and keeps no address (dashboard/app/trend.py). Nothing is sent when
+    settings.DASHBOARD_API_BASE is empty (locally and in tests)."""
+    if not settings.DASHBOARD_API_BASE:
+        return
+    threading.Thread(target=_send_active_day, args=(app, email, today.date().isoformat()), daemon=True).start()
 
 
 def per_user(db, owner_column, newest_column=None, where=None, source=None) -> Dict[int, Tuple[int, Optional[datetime]]]:

@@ -155,3 +155,63 @@ def test_the_gate_records_a_person_but_not_a_service_call(Session):
     assert row(Session, 1)[1] == 1
     client.get("/api/ping")
     assert row(Session, 1)[1] == 1  # not again within the hour
+
+
+# --- telling the dashboard about a day of use ----------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def announced(monkeypatch):
+    """What the dashboard would be told, as (app, email, day); the background thread is run on the spot."""
+    from shared_python import settings
+
+    sent = []
+    monkeypatch.setattr(settings, "DASHBOARD_API_BASE", "http://127.0.0.1:8090")
+    monkeypatch.setattr(usage, "_send_active_day", lambda app, email, day: sent.append((app, email, day)))
+    monkeypatch.setattr(usage.threading, "Thread", lambda target, args, daemon: type("T", (), {"start": lambda self: target(*args)})())
+    return sent
+
+
+def test_the_first_visit_of_a_day_is_announced_once_with_that_days_date(Session, announced):
+    seen = usage.LastSeen(Session, app="lists")
+    seen.record(1, now=datetime(2026, 11, 20, 9, 0))
+    seen.record(1, now=datetime(2026, 11, 20, 17, 0))  # the same day again
+    seen.record(1, now=datetime(2026, 11, 21, 8, 0))  # the next day
+    assert announced == [("lists", "a@example.com", "2026-11-20"), ("lists", "a@example.com", "2026-11-21")]
+
+
+def test_nothing_is_announced_without_an_app_key_or_a_dashboard(Session, announced, monkeypatch):
+    usage.LastSeen(Session).record(1, now=datetime(2026, 11, 20, 9, 0))  # no app key given
+    assert announced == []
+    from shared_python import settings
+
+    monkeypatch.setattr(settings, "DASHBOARD_API_BASE", None)
+    usage.LastSeen(Session, app="lists").record(2, now=datetime(2026, 11, 20, 9, 0))
+    assert announced == []
+
+
+def test_the_announcement_is_the_app_the_address_and_the_day_to_the_dashboards_route(monkeypatch):
+    import requests
+    from shared_python import settings
+
+    calls = []
+    monkeypatch.setattr(settings, "DASHBOARD_API_BASE", "http://127.0.0.1:8090/")
+    monkeypatch.setattr(requests, "post", lambda url, json=None, timeout=None: calls.append((url, json, timeout)))
+    usage._send_active_day("trips", "a@example.com", "2026-11-21")
+    assert calls == [("http://127.0.0.1:8090/internal/active-day", {"app": "trips", "email": "a@example.com", "day": "2026-11-21"}, 2)]
+
+
+def test_a_dashboard_that_does_not_answer_never_breaks_recording(Session, monkeypatch, caplog):
+    import requests
+    from shared_python import settings
+
+    monkeypatch.setattr(settings, "DASHBOARD_API_BASE", "http://127.0.0.1:8090")
+
+    def down(*args, **kwargs):
+        raise requests.ConnectionError("down")
+
+    monkeypatch.setattr(requests, "post", down)
+    usage._send_active_day("lists", "a@example.com", "2026-11-21")  # returns; only logged
+    assert "Could not tell the dashboard" in caplog.text
+    usage.LastSeen(Session, app="lists").record(1)  # and a real record still works, whatever the thread does
+    assert row(Session, 1)[1] == 1
