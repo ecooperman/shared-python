@@ -363,3 +363,49 @@ def test_the_pin_wording_remains_for_apps_still_behind_cloudflare(smtp, monkeypa
     _configure_smtp(monkeypatch)
     notify.tell_let_in("dana@example.com", "alice@example.com", "Lists", "https://lists.example")
     assert "one-time PIN" in smtp.instances[0].log[-1][1].get_content()
+
+
+# --- the link that fits: whether the invited address already has an account ------------------------------------------------------
+
+
+def _lookup_says(monkeypatch, answer):
+    from shared_python import account_lookup
+
+    monkeypatch.setattr(account_lookup, "exists", lambda email: answer)
+
+
+def test_someone_who_already_has_an_account_gets_only_the_sign_in_link(smtp, monkeypatch):
+    _configure_smtp(monkeypatch)
+    _front_door(monkeypatch)
+    _lookup_says(monkeypatch, True)
+    notify.tell_let_in("dana@example.com", "alice@example.com", "Lists", "https://lists.example.org/")
+    body = smtp.instances[0].log[-1][1].get_content()
+    assert _links(body) == ["https://lists.example.org/"]  # no create-an-account link to trip over
+    assert "already have an account" in body and "Create your account" not in body and "dana@example.com" in body
+
+
+def test_someone_with_no_account_gets_the_create_link_and_only_a_short_way_out(smtp, monkeypatch):
+    _configure_smtp(monkeypatch)
+    _front_door(monkeypatch)
+    _lookup_says(monkeypatch, False)
+    notify.tell_let_in("dana@example.com", "alice@example.com", "Lists", "https://lists.example.org/")
+    body = smtp.instances[0].log[-1][1].get_content()
+    signup, signin = _links(body)
+    assert "screen_hint=signup" in signup and signin == "https://lists.example.org/"
+    assert "Create your account" in body and "If it says you already have an account" in body and "Already have an account?" not in body
+
+
+def test_when_it_cannot_tell_the_email_carries_both_links_as_before(smtp, monkeypatch):
+    _configure_smtp(monkeypatch)
+    _front_door(monkeypatch)
+    _lookup_says(monkeypatch, None)
+    notify.tell_let_in("dana@example.com", "alice@example.com", "Lists", "https://lists.example.org/")
+    body = smtp.instances[0].log[-1][1].get_content()
+    assert len(_links(body)) == 2 and "Create your account" in body and "Already have an account?" in body
+
+
+def test_an_existing_account_with_no_open_link_is_pointed_at_the_sign_in_page(monkeypatch):
+    _front_door(monkeypatch)
+    _lookup_says(monkeypatch, True)
+    lines = notify._sign_in_lines("dana@example.com")
+    assert "https://dashboard.example.org/auth/login" in lines and not any("screen_hint" in line for line in lines)

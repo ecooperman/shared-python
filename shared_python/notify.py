@@ -11,7 +11,7 @@ from urllib.parse import urlencode
 
 import requests
 
-from . import auth, settings
+from . import account_lookup, auth, settings
 
 log = logging.getLogger(__name__)
 
@@ -114,31 +114,41 @@ def invite_requested(app_name: str, inviter_email: str, invitee_email: str, role
     )
 
 
-def create_account_url(to: str, open_url: Optional[str]) -> Optional[str]:
+def create_account_url(to: str, open_url: Optional[str], login_url: Optional[str] = None) -> Optional[str]:
     """The front door's sign-in with the create-an-account screen open and the invited address filled in,
-    coming back to `open_url` afterwards. None unless sign-in is through the front door."""
-    if not auth.front_door_active():
+    coming back to `open_url` afterwards. None unless sign-in is through the front door. The front door itself (the dashboard) has no
+    OIDC_LOGIN_URL of its own, so it passes its own `login_url`."""
+    if not login_url and not auth.front_door_active():
         return None
+    login_url = login_url or settings.OIDC_LOGIN_URL
     query = {"screen_hint": "signup", "login_hint": to}
     if open_url:
         query["next"] = open_url
-    return f"{settings.OIDC_LOGIN_URL}{'&' if '?' in settings.OIDC_LOGIN_URL else '?'}{urlencode(query)}"
+    return f"{login_url}{'&' if '?' in login_url else '?'}{urlencode(query)}"
 
 
-def _sign_in_lines(to: str, open_url: Optional[str] = None) -> list:
+def _sign_in_lines(to: str, open_url: Optional[str] = None, login_url: Optional[str] = None) -> list:
     """For someone who has never signed in here: name the address to use, since it has to be
     the one they were let in as. Through the shared front door (Auth0) a new person gets a link that
     opens the create-an-account screen with their address filled in, and a plain link for anyone who
     already has an account; through Cloudflare Access they are emailed a one-time PIN."""
-    signup = create_account_url(to, open_url)
+    signup = create_account_url(to, open_url, login_url)
     if signup:
+        sign_in = open_url or login_url or settings.OIDC_LOGIN_URL
+        known = account_lookup.exists(to)  # True / False / None (cannot tell): see shared_python.account_lookup
+        if known is True:
+            # They already have an account, so a create-an-account link would only give them an error.
+            return ["", "You already have an account with this address, so just sign in and open it here:", sign_in,
+                    "", f"Please use this email address, since it's the one you were let in as: {to}"]
         lines = [
             "",
             "New here? Create your account with this address (a passkey is the quickest way, or use Google or a password):",
             signup,
         ]
-        if open_url:
-            lines += ["", "Already have an account? Sign in and open it here:", open_url]
+        if known is None:
+            lines += ["", "Already have an account? Sign in and open it here:", open_url] if open_url else []
+        else:
+            lines += ["", "If it says you already have an account, sign in here instead:", sign_in]
         lines += ["", f"Please use this email address either way, since it's the one you were let in as: {to}"]
         return lines
     return [
@@ -149,6 +159,9 @@ def _sign_in_lines(to: str, open_url: Optional[str] = None) -> list:
         "",
         "and a one-time PIN will be sent to it - there is no password to set up.",
     ]
+
+
+sign_in_lines = _sign_in_lines  # for apps that write their own invite email (the dashboard's)
 
 
 def tell_given_access(
