@@ -42,9 +42,24 @@ def apps_dir() -> Path:
     return Path(configured) if configured else Path.cwd().parent
 
 
+def _open_read_only(database: Path) -> sqlite3.Connection:
+    """A connection that can never write and never creates a missing file (SQLite would otherwise make an empty one).
+
+    An app's database is in WAL mode (shared_python.sqlite_tuning), and a read-only reader of a WAL database needs its `-wal`/`-shm` files -
+    which exist while that app runs but are removed when its last connection closes (the app stopped, or the dashboard's per-call
+    connections). With none of them, the plain read-only open fails ("unable to open database file"), so then it is opened `immutable`: read as
+    it is on disk, which is complete because nobody is writing."""
+    uri = database.resolve().as_uri()
+    try:
+        connection = sqlite3.connect(f"{uri}?mode=ro", uri=True, timeout=2)
+        connection.execute("SELECT 1 FROM sqlite_master LIMIT 1")  # the open can succeed and the first read still fail
+        return connection
+    except sqlite3.OperationalError:
+        return sqlite3.connect(f"{uri}?mode=ro&immutable=1", uri=True, timeout=2)
+
+
 def _emails_in(database: Path) -> List[str]:
-    # mode=ro: this can never write, and never creates a missing file (SQLite would otherwise make an empty one).
-    connection = sqlite3.connect(f"{database.resolve().as_uri()}?mode=ro", uri=True, timeout=2)
+    connection = _open_read_only(database)
     try:
         return [row[0] for row in connection.execute("SELECT email FROM users")]
     finally:
@@ -52,7 +67,7 @@ def _emails_in(database: Path) -> List[str]:
 
 
 def _names_in(database: Path) -> dict:
-    connection = sqlite3.connect(f"{database.resolve().as_uri()}?mode=ro", uri=True, timeout=2)
+    connection = _open_read_only(database)
     try:
         rows = connection.execute("SELECT email, first_name, last_name FROM names")
         return {e.strip().lower(): " ".join(part for part in (f, l) if part) for e, f, l in rows}

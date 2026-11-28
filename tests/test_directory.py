@@ -91,3 +91,31 @@ def test_an_unreadable_names_file_is_skipped_not_fatal(tmp_path, caplog):
     (tmp_path / "dashboard" / "people.db").write_text("garbage")
     assert directory.known_people(base=tmp_path) == [{"email": "ann@x.com", "name": ""}]
     assert "Could not read people's names" in caplog.text
+
+
+def test_a_wal_database_with_no_wal_files_beside_it_is_still_read(tmp_path):
+    """An app's database is in WAL mode; its -wal/-shm files vanish when its last connection closes (the app stopped). A plain read-only open
+    fails without them, so it falls back to reading the file as it is."""
+    make_db(tmp_path, "lists", "gifts.db", ["ann@x.com"])
+    database = tmp_path / "lists" / "gifts.db"
+    connection = sqlite3.connect(database)
+    connection.execute("PRAGMA journal_mode=WAL")
+    connection.execute("INSERT INTO users (email, status) VALUES ('bob@x.com', 'active')")
+    connection.commit()
+    connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    connection.close()
+    for leftover in database.parent.glob("gifts.db-*"):
+        leftover.unlink()
+    assert directory.known_emails(base=tmp_path) == ["ann@x.com", "bob@x.com"]
+
+
+def test_a_wal_database_that_an_app_has_open_is_read_including_its_latest_writes(tmp_path):
+    make_db(tmp_path, "lists", "gifts.db", ["ann@x.com"])
+    writer = sqlite3.connect(tmp_path / "lists" / "gifts.db")
+    writer.execute("PRAGMA journal_mode=WAL")
+    writer.execute("INSERT INTO users (email, status) VALUES ('new@x.com', 'active')")
+    writer.commit()  # still only in the -wal file, not yet in the .db
+    try:
+        assert directory.known_emails(base=tmp_path) == ["ann@x.com", "new@x.com"]
+    finally:
+        writer.close()
