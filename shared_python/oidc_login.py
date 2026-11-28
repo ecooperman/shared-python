@@ -45,7 +45,7 @@ import requests
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
-from . import auth, settings
+from . import auth, pages, settings
 
 log = logging.getLogger(__name__)
 
@@ -153,13 +153,8 @@ def _page(title: str, message: str, status: int = 400, retry_next: str = "/", re
     body = f"""<!doctype html>
 <html lang="en" data-ui="v2">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+{pages.head_html(_assets_base())}
   <title>{brand} - {escape(title)}</title>
-  <link rel="stylesheet" href="{base}/theme.css">
-  <link rel="icon" type="image/svg+xml" href="{base}/logo.svg">
-  <link rel="icon" type="image/png" sizes="64x64" href="{base}/favicon.png">
-  <script src="{base}/theme-init.js"></script>
 </head>
 <body>
   <header class="app-header">

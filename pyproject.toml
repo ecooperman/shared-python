@@ -11,7 +11,11 @@ dependencies = [
     "fastapi",
     "requests",
     "PyJWT[crypto]",
+    "jinja2",
 ]
 
 [tool.setuptools]
 packages = ["shared_python"]
+
+[tool.setuptools.package-data]
+shared_python = ["templates/*.html"]
