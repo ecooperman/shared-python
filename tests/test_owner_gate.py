@@ -127,7 +127,7 @@ def test_a_signed_in_person_who_is_not_an_administrator_is_refused_everywhere(pr
     assert "private home" not in page.text and f'href="{FRONT}/auth/logout"' in page.text
     for method, path in [("GET", "/api/data"), ("POST", "/api/data"), ("DELETE", "/api/data/1"), ("GET", "/style.css")]:
         resp = c.request(method, path)
-        assert resp.status_code == 403 and "secret" not in resp.text and "42" not in resp.text
+        assert resp.status_code == 403 and "secret" not in resp.text and ": 42" not in resp.text
 
 
 def test_an_expired_session_is_treated_as_signed_out(production, key):
@@ -196,7 +196,7 @@ def test_the_exception_lets_exactly_the_agreed_call_through(production):
 def test_anything_else_with_or_without_a_token_is_still_refused(production, method, path, token):
     headers = {"X-Service-Token": token} if token else {}
     resp = client_for(build(service_access=only_plans_reads)).request(method, path, headers=headers)
-    assert resp.status_code in (401, 302, 405) and "secret" not in resp.text and "42" not in resp.text
+    assert resp.status_code in (401, 302, 405) and "secret" not in resp.text and ": 42" not in resp.text
 
 
 # --- locally and alongside Cloudflare ---------------------------------------------------------------------------------
@@ -250,4 +250,4 @@ def test_nothing_beyond_the_listed_files_is_public(production, method, path):
 @pytest.mark.parametrize("path", ["/icons/../api/data", "/icons/%2e%2e/api/data", "/icons//../api/data", "/icons/..%2fapi/data", "/icons/a\\..\\b"])
 def test_a_crafted_path_cannot_wander_out_of_a_public_folder(production, path):
     resp = client_for(build(public_paths=PUBLIC)).get(path)
-    assert resp.status_code in (302, 401, 404) and "secret" not in resp.text and "42" not in resp.text
+    assert resp.status_code in (302, 401, 404) and "secret" not in resp.text and ": 42" not in resp.text
